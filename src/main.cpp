@@ -11,6 +11,8 @@
 #define PIN_TFT_CS 5
 Adafruit_ST7735 tft = Adafruit_ST7735(PIN_TFT_CS, PIN_TFT_DC, PIN_TFT_RES);
 
+#include "heater_controller.h"
+
 #define PIN_BTN1 34
 #define PIN_SSR 32
 #define PIN_STATUS_INDICATOR 2 // built-in LED
@@ -25,7 +27,7 @@ enum heating_status_t {
 enum heater_action_t {
     HEATER_OFF = 0,
     HEATER_ON
-} heater_action;
+} heater_action; // just what the user input is telling the device, not the actual SSR output
 
 void init_tft() {
     // Need to modify Adafruit_ST7735.cpp: remove MADCTL_MX to de-mirror text
@@ -33,6 +35,8 @@ void init_tft() {
     tft.setRotation(3);
     tft.invertDisplay(true); // required
 }
+
+HeaterController heater_controller;
 
 volatile int last_btn = HIGH;
 volatile bool btn1_pressed = false;
@@ -69,6 +73,7 @@ void setup() {
     init_tft();
 
     heater_action = HEATER_OFF;
+    heater_controller.set_target(80);
 }
 
 void tft_text(int x, int y, const char *s) {
@@ -103,15 +108,12 @@ void tft_set_status_color(heating_status_t s) {
 }
 
 void set_ssr(heater_action_t a) {
-    Serial.print("SSR set to ");
     if (a == HEATER_ON) {
         digitalWrite(PIN_SSR, HIGH);
         //digitalWrite(PIN_STATUS_INDICATOR, HIGH);
-        Serial.println("ON");
     } else {
         digitalWrite(PIN_SSR, LOW);
         //digitalWrite(PIN_STATUS_INDICATOR, LOW);
-        Serial.println("OFF");
     }
 }
 
@@ -122,40 +124,42 @@ void loop() {
     static heater_action_t heater_action = HEATER_OFF;
     static heating_status_t heating_status = STATUS_COLD;
 
-    double td = t + 0.78;
-
     static unsigned long last_update_time = 0;
     const unsigned long m = millis();
 
-    if ((unsigned int)td < (t_target - 5)) {
-        if (heater_action == HEATER_ON) {
-            t += 2; // rapid increase during heating phase
-            heating_status = STATUS_HEATING;
-        } else  {
-            t = (t > 30 ? t - 1 : t); // cool to room temperature
-            heating_status = STATUS_COLD;
-        }
-    } else if ((unsigned int)td < (t_target - 2)) {
-        if (heater_action == HEATER_ON) t += 1; // slower increase when near target
-        else t -= 2;
-        heating_status = STATUS_NEAR_TARGET;
-    } else if ((unsigned int)td >= (t_target - 2) || (unsigned int)td < (t_target + 2)) {
-        if (heater_action == HEATER_ON) t += 0; // target reached, maintainer temperature
-        else t -= 2;
-        heating_status = STATUS_HOT;
-    } else {
-        heating_status = STATUS_COLD;
-    }
-
+    // Handle button press -> turn heating on or off
     if (btn1_pressed && ((last_btn_press_time + 200) < m)) {
         heater_action = (heater_action == HEATER_OFF) ? HEATER_ON : HEATER_OFF;
         btn1_pressed = false;
-
-        set_ssr(heater_action);
     }
+
+    // Set SSR based on HeaterController, not direct from button inputs or measured temperature
+    heater_controller.update(t);
+    if (heater_action == HEATER_ON && heater_controller.get_output() == 1) set_ssr(HEATER_ON);
+    else set_ssr(HEATER_OFF);
 
     // Only update Serial and display once per second
     if ((last_update_time + 1000) < m) {
+        if (t < (t_target - 5)) {
+            if (heater_action == HEATER_ON) {
+                t += 2; // rapid increase during heating phase
+                heating_status = STATUS_HEATING;
+            } else  {
+                t = (t > 30 ? t - 1 : t); // cool to room temperature
+                heating_status = STATUS_COLD;
+            }
+        } else if (t < (t_target - 2)) {
+            if (heater_action == HEATER_ON) t += 1; // slower increase when near target
+            else t -= 2;
+            heating_status = STATUS_NEAR_TARGET;
+        } else if (t >= (t_target - 2) || t < (t_target + 2)) {
+            if (heater_action == HEATER_ON) t += 0; // target reached, maintainer temperature
+            else t -= 2;
+            heating_status = STATUS_HOT;
+        } else {
+            heating_status = STATUS_COLD;
+        }
+
         Serial.print("LOOP: status ");
         Serial.print(heating_status);
         Serial.print(" heater ");
