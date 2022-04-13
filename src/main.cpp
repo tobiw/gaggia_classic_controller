@@ -1,17 +1,7 @@
 #include <Arduino.h>
-#include <Wire.h>
-#include <SPI.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>
-
-#define PIN_TFT_CLK 18
-#define PIN_TFT_SDA 23
-#define PIN_TFT_RES 4
-#define PIN_TFT_DC 2
-#define PIN_TFT_CS 5
-Adafruit_ST7735 tft = Adafruit_ST7735(PIN_TFT_CS, PIN_TFT_DC, PIN_TFT_RES);
 
 #include "heater_controller.h"
+#include "display.h"
 
 #define PIN_BTN1 34
 #define PIN_SSR 32
@@ -29,14 +19,9 @@ enum heater_action_t {
     HEATER_ON
 } heater_action; // just what the user input is telling the device, not the actual SSR output
 
-void init_tft() {
-    // Need to modify Adafruit_ST7735.cpp: remove MADCTL_MX to de-mirror text
-    tft.initR(INITR_MINI160x80);
-    tft.setRotation(3);
-    tft.invertDisplay(true); // required
-}
-
 HeaterController heater_controller;
+
+Display display;
 
 volatile int last_btn = HIGH;
 volatile bool btn1_pressed = false;
@@ -54,6 +39,7 @@ void IRAM_ATTR isr_btn1() {
 
 void setup() {
     Serial.begin(115200);
+    display.init();
 
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW);
@@ -70,39 +56,24 @@ void setup() {
     digitalWrite(PIN_SSR, LOW);
     pinMode(PIN_BTN1, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(PIN_BTN1), isr_btn1, FALLING);
-    init_tft();
 
     heater_action = HEATER_OFF;
     heater_controller.set_target(80);
 }
 
-void tft_text(int x, int y, const char *s) {
-    tft.setCursor(x, y);
-    tft.setTextSize(2);
-    tft.setTextColor(ST77XX_WHITE);
-    tft.setTextWrap(false);
-    tft.print(s);
-}
-
-void tft_draw_status(int color) {
-    //tft.fillScreen(color);
-    tft.fillScreen(0);
-    tft.fillRect(10, 40, tft.width() - 10, tft.height() - 10, color);
-}
-
-void tft_set_status_color(heating_status_t s) {
+void display_set_status_color(heating_status_t s) {
     switch (s) {
         case STATUS_COLD:
-            tft_draw_status(ST77XX_BLUE);
+            display.draw_rect(10, 40, 100, 70, ST77XX_BLUE);
             break;
         case STATUS_HEATING:
-            tft_draw_status(ST77XX_RED);
+            display.draw_rect(10, 40, 100, 70, ST77XX_RED);
             break;
         case STATUS_NEAR_TARGET:
-            tft_draw_status(ST77XX_ORANGE);
+            display.draw_rect(10, 40, 100, 70, ST77XX_ORANGE);
             break;
         case STATUS_HOT:
-            tft_draw_status(ST77XX_GREEN);
+            display.draw_rect(10, 40, 100, 70, ST77XX_GREEN);
             break;
     }
 }
@@ -165,13 +136,13 @@ void loop() {
         Serial.print(" heater ");
         Serial.println(heater_action);
 
-        tft_set_status_color(heating_status);
-        tft_text(10, 10, "T:");
-        dtostrf(td, 3, 1, buf);
-        tft_text(40, 10, buf);
+        display_set_status_color(heating_status);
+        display.print_text(10, 10, "T:");
+        dtostrf((double)t, 3, 1, buf);
+        display.print_text(40, 10, buf);
         sprintf(buf, "(%u)", t_target);
-        tft_text(90, 10, buf);
-        tft_text(10, 20, heater_action == HEATER_OFF ? "OFF" : "ON");
+        display.print_text(90, 10, buf);
+        display.print_text(10, 20, heater_action == HEATER_OFF ? "OFF" : "ON");
 
         last_update_time = m;
     }
