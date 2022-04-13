@@ -3,10 +3,10 @@
 #include "heater_controller.h"
 #include "display.h"
 
-#define PIN_BTN1 34
-#define PIN_SSR 32
-#define PIN_STATUS_INDICATOR 2 // built-in LED
-#define PIN_ADC_PRESSURE 35
+#define PIN_BTN1 A3
+#define PIN_SSR A2
+#define PIN_STATUS_INDICATOR 13 // built-in LED
+#define PIN_ADC_PRESSURE A0
 
 enum heating_status_t {
     STATUS_COLD = 0,
@@ -29,7 +29,7 @@ volatile bool btn1_pressed = false;
 volatile unsigned long last_btn_press_time = 0;
 
 // Note: cannot use delay() in ISR for debouncing
-void IRAM_ATTR isr_btn1() {
+void isr_btn1() {
     const int btn = digitalRead(PIN_BTN1);
     if (!btn1_pressed && digitalRead(PIN_BTN1) == LOW && last_btn == HIGH) {
         btn1_pressed = true;
@@ -145,6 +145,7 @@ void loop() {
         Serial.print(" bar ");
         Serial.println(pressure_bar);
 
+        display.clear();
         display_set_status_color(heating_status);
         display.print_text(10, 10, "T:");
         dtostrf((double)t, 3, 1, buf);

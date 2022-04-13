@@ -10,6 +10,7 @@ class Display {
     public:
         Display();
         void init();
+        void clear();
         void print_text(int x, int y, const char *s);
         void draw_rect(int x, int y, int w, int h, int color);
     private:
