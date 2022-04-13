@@ -6,6 +6,7 @@
 #define PIN_BTN1 34
 #define PIN_SSR 32
 #define PIN_STATUS_INDICATOR 2 // built-in LED
+#define PIN_ADC_PRESSURE 35
 
 enum heating_status_t {
     STATUS_COLD = 0,
@@ -43,14 +44,8 @@ void setup() {
 
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW);
-    delay(500);
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(500);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(500);
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(500);
-    digitalWrite(LED_BUILTIN, LOW);
+
+    pinMode(PIN_ADC_PRESSURE, INPUT);
 
     pinMode(PIN_SSR, OUTPUT);
     digitalWrite(PIN_SSR, LOW);
@@ -94,6 +89,7 @@ void loop() {
     const unsigned int t_target = 80;
     static heater_action_t heater_action = HEATER_OFF;
     static heating_status_t heating_status = STATUS_COLD;
+    const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
     static unsigned long last_update_time = 0;
     const unsigned long m = millis();
@@ -131,10 +127,23 @@ void loop() {
             heating_status = STATUS_COLD;
         }
 
+        // Pressure conversion
+        // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar
+        // voltage range of sensor is 4.5V
+        // raw value is 0-4096 with Vref 1.1V?
+        double pressure_V = pressure_raw * (3.3 / 4096.0); // factor is (maxV / maxDigitalValue)
+        double pressure_bar = ((pressure_V - (480 * 3.3 / 4096.0)) * 3.0); // subtract 1 bar pressure voltage and apply conversion factor
+
         Serial.print("LOOP: status ");
         Serial.print(heating_status);
         Serial.print(" heater ");
-        Serial.println(heater_action);
+        Serial.print(heater_action);
+        Serial.print(" ADC ");
+        Serial.print(pressure_raw);
+        Serial.print(" V ");
+        Serial.print(pressure_V);
+        Serial.print(" bar ");
+        Serial.println(pressure_bar);
 
         display_set_status_color(heating_status);
         display.print_text(10, 10, "T:");
@@ -143,6 +152,8 @@ void loop() {
         sprintf(buf, "(%u)", t_target);
         display.print_text(90, 10, buf);
         display.print_text(10, 20, heater_action == HEATER_OFF ? "OFF" : "ON");
+        sprintf(buf, "P: %u", pressure_raw);
+        display.print_text(80, 64, buf);
 
         last_update_time = m;
     }
