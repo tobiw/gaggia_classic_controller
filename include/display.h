@@ -2,9 +2,8 @@
 #define __DISPLAY_H__
 
 #include <Wire.h>
-#include <SPI.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>
+#include <Adafruit_SSD1306.h>
 
 class Display {
     public:
@@ -12,9 +11,9 @@ class Display {
         void init();
         void clear();
         void print_text(int x, int y, const char *s);
-        void draw_rect(int x, int y, int w, int h, int color);
+        void draw_rect(int x, int y, int w, int h);
     private:
-        Adafruit_ST7735 *tft;
+        Adafruit_SSD1306 *tft;
 };
 
 #endif
