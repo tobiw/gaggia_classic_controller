@@ -11,7 +11,7 @@ class Display {
         void init();
         void clear();
         void print_text(int x, int y, const char *s);
-        void draw_rect(int x, int y, int w, int h);
+        void draw_rect(int x, int y, int w, int h, int color);
     private:
         Adafruit_SSD1306 *tft;
 };

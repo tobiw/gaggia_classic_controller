@@ -48,6 +48,8 @@ void setup() {
     Serial.begin(115200);
     display.init();
     display.clear();
+    display.print_text(0, 0, "T: 20.0");
+    display.print_text(0, 19, "P: 1.0 bar");
 
     // RGB LEDs
 #define LED_TEST_DELAY 200
@@ -109,7 +111,7 @@ void set_ssr(heater_action_t a) {
 }
 
 void loop() {
-    static int t = 20;
+    static double t = 20.3;
     static char buf[32];
     static heater_action_t heater_action = HEATER_OFF;
     static heater_action_t last_heater_action = HEATER_OFF;
@@ -119,6 +121,9 @@ void loop() {
 
     static unsigned long last_update_time = 0;
     const unsigned long m = millis();
+
+    static double last_temperature = t;
+    static double last_pressure_bar = 1.0;
 
     // Handle button press -> turn heating on or off
     if (digitalRead(PIN_BTN1) == LOW && last_btn == HIGH) { // pressed
@@ -143,32 +148,13 @@ void loop() {
 
     // Only update Serial and display once per second
     if ((last_update_time + DISPLAY_UPDATE_INTERVAL) < m) {
-        /*if (t < (t_target - 5)) {
-            if (heater_action == HEATER_ON) {
-                t += 2; // rapid increase during heating phase
-                heating_status = STATUS_HEATING;
-            } else  {
-                t = (t > 30 ? t - 1 : t); // cool to room temperature
-                heating_status = STATUS_COLD;
-            }
-        } else if (t < (t_target - 2)) {
-            if (heater_action == HEATER_ON) t += 1; // slower increase when near target
-            else t -= 2;
-            heating_status = STATUS_NEAR_TARGET;
-        } else if (t >= (t_target - 2) || t < (t_target + 2)) {
-            if (heater_action == HEATER_ON) t += 0; // target reached, maintainer temperature
-            else t -= 2;
-            heating_status = STATUS_HOT;
-        } else {
-            heating_status = STATUS_COLD;
-        }*/
-
         // Pressure conversion
         // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar
         // voltage range of sensor is 0.5-4.5V = 4V
         double pressure_V = pressure_raw * (5.0 / 1024.0); // factor is (maxV / maxDigitalValue)
         double pressure_bar = (pressure_V - 0.17) * 3.0; // subtract 1 bar pressure voltage and apply conversion factor
 
+        // Serial monitor output
         Serial.print("LOOP: status ");
         Serial.print(heating_status);
         Serial.print(" heater ");
@@ -180,17 +166,27 @@ void loop() {
         Serial.print(" bar ");
         Serial.println(pressure_bar);
 
-        display.clear();
-        //display_set_status_color(heating_status);
-        display.print_text(0, 0, "T:");
-        dtostrf((double)t, 3, 1, buf);
-        display.print_text(20, 0, buf);
-        sprintf(buf, "(%u)", t_target);
-        display.print_text(50, 0, buf);
-        display.print_text(50, 20, heater_action == HEATER_OFF ? "OFF" : "ON");
-        dtostrf(pressure_bar, 2, 1, buf);
-        display.print_text(80, 20, buf);
+        // First line: temperature (update if changed by 0.5)
+        if (t < (last_temperature - 0.5) || t > (last_temperature + 0.5)) {
+            display.draw_rect(34, 0, 80, 18, SSD1306_BLACK);
+            display.print_text(0, 0, "T:");
+            dtostrf((double)t, 3, 1, buf);
+            display.print_text(34, 0, buf);
+            sprintf(buf, "(%u)", t_target);
+            display.print_text(88, 0, buf);
+            last_temperature = t;
+        }
+        // Second line: pressure (update if changed by 0.5)
+        if (pressure_bar < (last_pressure_bar - 0.5) || pressure_bar > (last_pressure_bar + 0.5)) {
+            display.draw_rect(28, 19, 80, 32, SSD1306_BLACK);
+            display.print_text(0, 19, "P:");
+            dtostrf(pressure_bar, 2, 1, buf);
+            display.print_text(28, 19, buf);
+            display.print_text(60, 19, " bar");
+            last_pressure_bar = pressure_bar;
+        }
 
         last_update_time = m;
     }
+
 }

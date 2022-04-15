@@ -12,7 +12,7 @@ void Display::init()
 
     tft->display();
 
-    tft->setTextSize(1);
+    tft->setTextSize(2);
     tft->setTextColor(SSD1306_WHITE);
     tft->setTextWrap(false);
 }
@@ -29,7 +29,7 @@ void Display::print_text(int x, int y, const char *s)
     tft->display();
 }
 
-void Display::draw_rect(int x, int y, int w, int h)
+void Display::draw_rect(int x, int y, int w, int h, int color)
 {
-    tft->fillRect(x, y, w, h, SSD1306_WHITE);
+    tft->fillRect(x, y, w, h, color);
 }
