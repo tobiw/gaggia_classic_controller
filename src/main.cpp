@@ -24,7 +24,10 @@ enum heating_status_t {
 
 enum heater_action_t {
     HEATER_OFF = 0,
-    HEATER_ON
+    HEATER_ON,
+    HEATER_50PCT,
+    HEATER_25PCT,
+    HEATER_12PCT
 } heater_action; // just what the user input is telling the device, not the actual SSR output
 
 HeaterController heater_controller;
@@ -49,7 +52,14 @@ void setup() {
     display.init();
     display.clear();
     display.print_text(0, 0, "T: 20.0");
-    display.print_text(0, 19, "P: 1.0 bar");
+    display.print_text(0, 19, "1.0 bar");
+
+    noInterrupts();
+    TCCR1A = 0;
+    TCNT1 = 57723; // default 0.5 s interval
+    TCCR1B = _BV(CS10) | _BV(CS12);
+    TIMSK1 |= _BV(TOIE1);
+    interrupts();
 
     // RGB LEDs
 #define LED_TEST_DELAY 200
@@ -76,43 +86,63 @@ void setup() {
     heater_controller.set_target(80);
 }
 
-void display_set_status_color(heating_status_t s) {
-    const int y = 24;
-    // TODO: based on HeaterController status instead of user input
-    /*switch (s) {
-        case STATUS_COLD:
-            display.print_text(0, y, "Cold");
-            set_rgb_led(0, 0, 1);
-            break;
-        case STATUS_HEATING:
-            display.print_text(0, y, "Heating");
-            set_rgb_led(1, 0, 0);
-            break;
-        case STATUS_NEAR_TARGET:
-            display.print_text(0, y, "Near");
-            set_rgb_led(1, 0, 0);
-            break;
-        case STATUS_HOT:
-            display.print_text(0, y, "Hot");
-            set_rgb_led(0, 1, 0);
-            break;
-    }*/
-    set_rgb_led(heater_action == HEATER_ON ? 1 : 0, 0, 0);
-}
+volatile bool heater_pwm = false;
+volatile bool current_ssr_output = false;
 
 void set_ssr(heater_action_t a) {
     if (a == HEATER_ON) {
+        heater_pwm = false;
         digitalWrite(PIN_SSR, HIGH);
         set_rgb_led(1, 0, 0);
-    } else {
+    } else if (a == HEATER_OFF) {
+        heater_pwm = false;
         digitalWrite(PIN_SSR, LOW);
         set_rgb_led(0, 0, 0);
+    } else {
+        heater_pwm = true;
+        //set_rgb_led(0, 1, 0);
+        // Driving of SSR occurs in TIMER1_OVF ISR
+    }
+}
+
+volatile uint8_t isr_heater_action = 0;
+
+ISR(TIMER1_OVF_vect)
+{
+    if (heater_pwm) {
+        current_ssr_output = !current_ssr_output;
+        digitalWrite(PIN_SSR, current_ssr_output ? HIGH : LOW);
+        digitalWrite(PIN_LED_R, current_ssr_output ? LOW : HIGH);
+
+        // Set 65535-x according to next PWM phase when duty cycle is < 50%
+        // 50%: (16MHz / 1024 / (65535-15625) = 57723 = 1/2 s on and off
+        // 25%: 61629 on, 53816 off
+        // 12%: 63660 on, 51785 off
+        if (isr_heater_action == 2) { // 50%
+            TCNT1 = 57723;
+        } else if (isr_heater_action == 3) { // 25%
+            if (current_ssr_output) { // on cycle
+                TCNT1 = 61629;
+            } else { // off cycle
+                TCNT1 = 53816;
+            }
+        } else if (isr_heater_action == 4) { // 12%
+            if (current_ssr_output) { // on cycle
+                TCNT1 = 63660;
+            } else { // off cycle
+                TCNT1 = 51785;
+            }
+        } else {
+            TCNT1 = 57723;
+        }
+    } else {
+        TCNT1 = 57723; // default 0.5 s interval
     }
 }
 
 void loop() {
     static double t = 20.3;
-    static char buf[32];
+    static char buf[32], buf2[32];
     static heater_action_t heater_action = HEATER_OFF;
     static heater_action_t last_heater_action = HEATER_OFF;
     static heating_status_t heating_status = STATUS_COLD;
@@ -128,7 +158,29 @@ void loop() {
     // Handle button press -> turn heating on or off
     if (digitalRead(PIN_BTN1) == LOW && last_btn == HIGH) { // pressed
         if ((last_btn_press_time + 200) < m) { // debounce
-            heater_action = (heater_action == HEATER_OFF) ? HEATER_ON : HEATER_OFF;
+            switch (heater_action) {
+                case HEATER_OFF:
+                    heater_action = HEATER_ON;
+                    isr_heater_action = 1;
+                    break;
+                case HEATER_ON:
+                    heater_action = HEATER_50PCT;
+                    isr_heater_action = 2;
+                    break;
+                case HEATER_50PCT:
+                    heater_action = HEATER_25PCT;
+                    isr_heater_action = 3;
+                    break;
+                case HEATER_25PCT:
+                    heater_action = HEATER_12PCT;
+                    isr_heater_action = 4;
+                    break;
+                case HEATER_12PCT:
+                    heater_action = HEATER_OFF;
+                    isr_heater_action = 0;
+                    break;
+            }
+
             last_btn_press_time = m;
             last_btn = LOW;
         }
@@ -141,8 +193,7 @@ void loop() {
     //heater_controller.update(t);
     //if (heater_action == HEATER_ON && heater_controller.get_output() == 1) set_ssr(HEATER_ON);
     if (heater_action != last_heater_action) {
-        if (heater_action == HEATER_ON) set_ssr(HEATER_ON);
-        else set_ssr(HEATER_OFF);
+        set_ssr(heater_action);
         last_heater_action = heater_action;
     }
 
@@ -178,15 +229,33 @@ void loop() {
         }
         // Second line: pressure (update if changed by 0.5)
         if (pressure_bar < (last_pressure_bar - 0.5) || pressure_bar > (last_pressure_bar + 0.5)) {
-            display.draw_rect(28, 19, 80, 32, SSD1306_BLACK);
-            display.print_text(0, 19, "P:");
+            display.draw_rect(0, 19, 60, 32, SSD1306_BLACK);
             dtostrf(pressure_bar, 2, 1, buf);
-            display.print_text(28, 19, buf);
-            display.print_text(60, 19, " bar");
+            sprintf(buf2, "%s bar", buf);
+            display.print_text(0, 19, buf2);
             last_pressure_bar = pressure_bar;
         }
 
+        display.draw_rect(80, 19, 128, 32, SSD1306_BLACK);
+        switch (heater_action) {
+            case HEATER_ON:
+                strcpy(buf, "ON");
+                break;
+            case HEATER_50PCT:
+                strcpy(buf, "50%");
+                break;
+            case HEATER_25PCT:
+                strcpy(buf, "25%");
+                break;
+            case HEATER_12PCT:
+                strcpy(buf, "12%");
+                break;
+            default:
+                strcpy(buf, "OFF");
+                break;
+        }
+        display.print_text(92, 19, buf);
+
         last_update_time = m;
     }
-
 }
