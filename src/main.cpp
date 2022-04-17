@@ -1,5 +1,7 @@
 #include <Arduino.h>
 
+#include "max6675.h"
+
 #include "heater_controller.h"
 #include "display.h"
 
@@ -33,6 +35,8 @@ enum heater_action_t {
 HeaterController heater_controller;
 
 Display display;
+
+MAX6675 thermocouple(15, 10, 14); // SCK, CS, MISO
 
 int last_btn = HIGH;
 unsigned long last_btn_press_time = 0;
@@ -141,19 +145,19 @@ ISR(TIMER1_OVF_vect)
 }
 
 void loop() {
-    static double t = 20.3;
     static char buf[32], buf2[32];
     static heater_action_t heater_action = HEATER_OFF;
     static heater_action_t last_heater_action = HEATER_OFF;
-    static heating_status_t heating_status = STATUS_COLD;
     const unsigned int t_target = 80;
-    const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
     static unsigned long last_update_time = 0;
     const unsigned long m = millis();
 
-    static double last_temperature = t;
+    static double last_temperature = 0.0;
     static double last_pressure_bar = 1.0;
+
+    const double temperature = thermocouple.readCelsius();
+    const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
     // Handle button press -> turn heating on or off
     if (digitalRead(PIN_BTN1) == LOW && last_btn == HIGH) { // pressed
@@ -190,7 +194,7 @@ void loop() {
 
     // Set SSR based on HeaterController, not direct from button inputs or measured temperature
     // TODO: Use HeaterController (PID)
-    //heater_controller.update(t);
+    //heater_controller.update(temperature);
     //if (heater_action == HEATER_ON && heater_controller.get_output() == 1) set_ssr(HEATER_ON);
     if (heater_action != last_heater_action) {
         set_ssr(heater_action);
@@ -206,9 +210,7 @@ void loop() {
         double pressure_bar = (pressure_V - 0.17) * 3.0; // subtract 1 bar pressure voltage and apply conversion factor
 
         // Serial monitor output
-        Serial.print("LOOP: status ");
-        Serial.print(heating_status);
-        Serial.print(" heater ");
+        Serial.print("LOOP: heater");
         Serial.print(heater_action);
         Serial.print(" ADC ");
         Serial.print(pressure_raw);
@@ -218,14 +220,14 @@ void loop() {
         Serial.println(pressure_bar);
 
         // First line: temperature (update if changed by 0.5)
-        if (t < (last_temperature - 0.5) || t > (last_temperature + 0.5)) {
+        if (temperature < (last_temperature - 0.5) || temperature > (last_temperature + 0.5)) {
             display.draw_rect(34, 0, 80, 18, SSD1306_BLACK);
             display.print_text(0, 0, "T:");
-            dtostrf((double)t, 3, 1, buf);
+            dtostrf(temperature, 3, 1, buf);
             display.print_text(34, 0, buf);
             sprintf(buf, "(%u)", t_target);
             display.print_text(88, 0, buf);
-            last_temperature = t;
+            last_temperature = temperature;
         }
         // Second line: pressure (update if changed by 0.5)
         if (pressure_bar < (last_pressure_bar - 0.5) || pressure_bar > (last_pressure_bar + 0.5)) {
