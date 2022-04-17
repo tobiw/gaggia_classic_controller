@@ -16,6 +16,7 @@
 #define PIN_LED_B 21
 
 #define DISPLAY_UPDATE_INTERVAL 500
+#define RECORD_LOG_SIZE 32
 
 enum heating_status_t {
     STATUS_COLD = 0,
@@ -37,9 +38,6 @@ HeaterController heater_controller;
 Display display;
 
 MAX6675 thermocouple(15, 10, 14); // SCK, CS, MISO
-
-int last_btn = HIGH;
-unsigned long last_btn_press_time = 0;
 
 void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
     if (r + g + b <= 1) {
@@ -158,6 +156,18 @@ void loop() {
     const double temperature = thermocouple.readCelsius();
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
+    static int last_btn = HIGH;
+    static unsigned long last_btn_press_time = 0;
+
+    static int log_index = 0;
+    static bool record_log = false;
+
+    // Record pressure (in bar * 10) every 0.5 s
+    static uint8_t pressure_log[RECORD_LOG_SIZE];
+
+    // Record temperature (in C * 10) every 0.5 s
+    static uint16_t temperature_log[RECORD_LOG_SIZE];
+
     // Handle button press -> turn heating on or off
     if (digitalRead(PIN_BTN1) == LOW && last_btn == HIGH) { // pressed
         if ((last_btn_press_time + 200) < m) { // debounce
@@ -218,40 +228,52 @@ void loop() {
         Serial.print(" bar ");
         Serial.println(pressure_bar);
 
+        // First line: temperature
+        dtostrf(temperature, 3, 1, buf);
+        sprintf(buf_temperature, "%sC (%uC)", buf, t_target);
+
+        // Second line: pressure
+        dtostrf(pressure_bar, 2, 1, buf);
+        sprintf(buf_pressure, "%s bar", buf);
+
+        // Third line: status
+        switch (heater_action) {
+            case HEATER_ON:
+                strcpy(buf, " ON");
+                break;
+            case HEATER_50PCT:
+                strcpy(buf, "50%");
+                break;
+            case HEATER_25PCT:
+                strcpy(buf, "25%");
+                break;
+            case HEATER_12PCT:
+                strcpy(buf, "12%");
+                break;
+            default:
+                strcpy(buf, "OFF");
+                break;
+        }
+        sprintf(buf_status, "%s  %d", buf, log_index);
+
         // Start drawing display
         display.firstPage();
         do {
-            // First line: temperature
-            dtostrf(temperature, 3, 1, buf);
-            sprintf(buf_temperature, "%sC (%uC)", buf, t_target);
-
-            // Second line: pressure
-            dtostrf(pressure_bar, 2, 1, buf);
-            sprintf(buf_pressure, "%s bar", buf);
-
-            // Third line: status
-            switch (heater_action) {
-                case HEATER_ON:
-                    strcpy(buf_status, "ON");
-                    break;
-                case HEATER_50PCT:
-                    strcpy(buf_status, "50%");
-                    break;
-                case HEATER_25PCT:
-                    strcpy(buf_status, "25%");
-                    break;
-                case HEATER_12PCT:
-                    strcpy(buf_status, "12%");
-                    break;
-                default:
-                    strcpy(buf_status, "OFF");
-                    break;
-            }
-
             display.print_text(0, display.getLineY(0), buf_temperature);
             display.print_text(0, display.getLineY(1), buf_pressure);
             display.print_text(0, display.getLineY(2), buf_status);
         } while(display.nextPage());
+
+        // Record temperature and pressure to log
+        if (record_log) {
+            temperature_log[log_index] = (uint16_t)(temperature * 10.0);
+            pressure_log[log_index] = (uint8_t)(pressure_bar * 10.0);
+            log_index++;
+            if (log_index >= RECORD_LOG_SIZE) {
+                record_log = false;
+                log_index = 0;
+            }
+        }
 
         last_update_time = m;
     }
