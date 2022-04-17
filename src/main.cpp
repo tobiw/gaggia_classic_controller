@@ -28,9 +28,7 @@ enum heating_status_t {
 enum heater_action_t {
     HEATER_OFF = 0,
     HEATER_ON,
-    HEATER_50PCT,
     HEATER_25PCT,
-    HEATER_12PCT,
     HEATER_7PCT
 } heater_action; // just what the user input is telling the device, not the actual SSR output
 
@@ -127,21 +125,13 @@ ISR(TIMER1_OVF_vect)
         // 50%: (16MHz / 1024 / (65535-15625) = 57723 = 1/2 s on and off
         // 25%: 61629 on, 53816 off
         // 12%: 63660 on, 51785 off
-        if (isr_heater_action == 2) { // 50%
-            TCNT1 = 57723;
-        } else if (isr_heater_action == 3) { // 25%
+        if (isr_heater_action == 2) { // 25%
             if (current_ssr_output) { // on cycle
                 TCNT1 = 61629;
             } else { // off cycle
                 TCNT1 = 53816;
             }
-        } else if (isr_heater_action == 4) { // 12%
-            if (current_ssr_output) { // on cycle
-                TCNT1 = 63660;
-            } else { // off cycle
-                TCNT1 = 51785;
-            }
-        } else if (isr_heater_action == 5) { // 7%
+        } else if (isr_heater_action == 3) { // 7%
             if (current_ssr_output) { // on cycle
                 TCNT1 = 64441;
             } else { // off cycle
@@ -190,20 +180,12 @@ void loop() {
                     isr_heater_action = 1;
                     break;
                 case HEATER_ON:
-                    heater_action = HEATER_50PCT;
+                    heater_action = HEATER_25PCT;
                     isr_heater_action = 2;
                     break;
-                case HEATER_50PCT:
-                    heater_action = HEATER_25PCT;
-                    isr_heater_action = 3;
-                    break;
                 case HEATER_25PCT:
-                    heater_action = HEATER_12PCT;
-                    isr_heater_action = 4;
-                    break;
-                case HEATER_12PCT:
                     heater_action = HEATER_7PCT;
-                    isr_heater_action = 5;
+                    isr_heater_action = 3;
                     break;
                 case HEATER_7PCT:
                     heater_action = HEATER_OFF;
@@ -258,14 +240,8 @@ void loop() {
             case HEATER_ON:
                 strcpy(buf, " ON");
                 break;
-            case HEATER_50PCT:
-                strcpy(buf, "50%");
-                break;
             case HEATER_25PCT:
                 strcpy(buf, "25%");
-                break;
-            case HEATER_12PCT:
-                strcpy(buf, "12%");
                 break;
             case HEATER_7PCT:
                 strcpy(buf, " 7%");
