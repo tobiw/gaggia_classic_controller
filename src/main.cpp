@@ -54,9 +54,9 @@ void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
 void setup() {
     Serial.begin(115200);
     display.init();
-    display.clear();
+    /*display.clear();
     display.print_text(0, 0, "T: 20.0");
-    display.print_text(0, 19, "1.0 bar");
+    display.print_text(0, 19, "1.0 bar");*/
 
     noInterrupts();
     TCCR1A = 0;
@@ -145,16 +145,15 @@ ISR(TIMER1_OVF_vect)
 }
 
 void loop() {
-    static char buf[32], buf2[32];
+    static char buf[32];
+    static char buf_temperature[32], buf_pressure[32], buf_status[16];
+
     static heater_action_t heater_action = HEATER_OFF;
     static heater_action_t last_heater_action = HEATER_OFF;
     const unsigned int t_target = 80;
 
     static unsigned long last_update_time = 0;
     const unsigned long m = millis();
-
-    static double last_temperature = 0.0;
-    static double last_pressure_bar = 1.0;
 
     const double temperature = thermocouple.readCelsius();
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
@@ -219,44 +218,40 @@ void loop() {
         Serial.print(" bar ");
         Serial.println(pressure_bar);
 
-        // First line: temperature (update if changed by 0.5)
-        if (temperature < (last_temperature - 0.5) || temperature > (last_temperature + 0.5)) {
-            display.draw_rect(34, 0, 80, 18, SSD1306_BLACK);
-            display.print_text(0, 0, "T:");
+        // Start drawing display
+        display.firstPage();
+        do {
+            // First line: temperature
             dtostrf(temperature, 3, 1, buf);
-            display.print_text(34, 0, buf);
-            sprintf(buf, "(%u)", t_target);
-            display.print_text(88, 0, buf);
-            last_temperature = temperature;
-        }
-        // Second line: pressure (update if changed by 0.5)
-        if (pressure_bar < (last_pressure_bar - 0.5) || pressure_bar > (last_pressure_bar + 0.5)) {
-            display.draw_rect(0, 19, 60, 32, SSD1306_BLACK);
-            dtostrf(pressure_bar, 2, 1, buf);
-            sprintf(buf2, "%s bar", buf);
-            display.print_text(0, 19, buf2);
-            last_pressure_bar = pressure_bar;
-        }
+            sprintf(buf_temperature, "%sC (%uC)", buf, t_target);
 
-        display.draw_rect(80, 19, 128, 32, SSD1306_BLACK);
-        switch (heater_action) {
-            case HEATER_ON:
-                strcpy(buf, "ON");
-                break;
-            case HEATER_50PCT:
-                strcpy(buf, "50%");
-                break;
-            case HEATER_25PCT:
-                strcpy(buf, "25%");
-                break;
-            case HEATER_12PCT:
-                strcpy(buf, "12%");
-                break;
-            default:
-                strcpy(buf, "OFF");
-                break;
-        }
-        display.print_text(92, 19, buf);
+            // Second line: pressure
+            dtostrf(pressure_bar, 2, 1, buf);
+            sprintf(buf_pressure, "%s bar", buf);
+
+            // Third line: status
+            switch (heater_action) {
+                case HEATER_ON:
+                    strcpy(buf_status, "ON");
+                    break;
+                case HEATER_50PCT:
+                    strcpy(buf_status, "50%");
+                    break;
+                case HEATER_25PCT:
+                    strcpy(buf_status, "25%");
+                    break;
+                case HEATER_12PCT:
+                    strcpy(buf_status, "12%");
+                    break;
+                default:
+                    strcpy(buf_status, "OFF");
+                    break;
+            }
+
+            display.print_text(0, display.getLineY(0), buf_temperature);
+            display.print_text(0, display.getLineY(1), buf_pressure);
+            display.print_text(0, display.getLineY(2), buf_status);
+        } while(display.nextPage());
 
         last_update_time = m;
     }

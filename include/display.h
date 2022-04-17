@@ -2,9 +2,12 @@
 #define __DISPLAY_H__
 
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <U8glib.h>
 
+/*
+ * Mandatory x offset: 5 pixel
+ * line 1: 20, line 2: 40, line 3: 60
+ */
 class Display {
     public:
         Display();
@@ -12,8 +15,11 @@ class Display {
         void clear();
         void print_text(int x, int y, const char *s);
         void draw_rect(int x, int y, int w, int h, int color);
+        int getLineY(int i);
+        void firstPage();
+        int nextPage();
     private:
-        Adafruit_SSD1306 *tft;
+        U8GLIB_SSD1306_128X64 *tft;
 };
 
 #endif
