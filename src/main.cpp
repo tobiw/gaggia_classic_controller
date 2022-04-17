@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
 #include "max6675.h"
+#include "SmartButton.h"
 
 #include "heater_controller.h"
 #include "display.h"
@@ -18,6 +19,12 @@
 #define DISPLAY_UPDATE_INTERVAL 500
 #define RECORD_LOG_SIZE 32
 
+enum display_status_t {
+    DISPLAY_LIVE = 0,
+    DISPLAY_GRAPH_TEMPERATURE,
+    DISPLAY_GRAPH_PRESSURE
+};
+
 enum heating_status_t {
     STATUS_COLD = 0,
     STATUS_HEATING,
@@ -30,13 +37,23 @@ enum heater_action_t {
     HEATER_ON,
     HEATER_25PCT,
     HEATER_7PCT
-} heater_action; // just what the user input is telling the device, not the actual SSR output
+}; // just what the user input is telling the device, not the actual SSR output
+
+// Globals
+display_status_t display_status = DISPLAY_LIVE;
+heater_action_t heater_action = HEATER_OFF;
+volatile uint8_t isr_heater_action = 0;
 
 HeaterController heater_controller;
 
 Display display;
 
 MAX6675 thermocouple(15, 10, 14); // SCK, CS, MISO
+
+using namespace smartbutton;
+SmartButton button(PIN_BTN1, SmartButton::InputType::NORMAL_HIGH);
+bool button_pressed = false;
+bool button_long_pressed = false;
 
 void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
     if (r + g + b <= 1) {
@@ -48,12 +65,49 @@ void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
     }
 }
 
+void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
+    if (event == SmartButton::Event::CLICK) {
+        if (clicks == 1) {
+            switch (heater_action) {
+                case HEATER_OFF:
+                    heater_action = HEATER_ON;
+                    isr_heater_action = 1;
+                    break;
+                case HEATER_ON:
+                    heater_action = HEATER_25PCT;
+                    isr_heater_action = 2;
+                    break;
+                case HEATER_25PCT:
+                    heater_action = HEATER_7PCT;
+                    isr_heater_action = 3;
+                    break;
+                case HEATER_7PCT:
+                    heater_action = HEATER_OFF;
+                    isr_heater_action = 0;
+                    break;
+            }
+        } else if (clicks == 2) {
+            heater_action = HEATER_OFF;
+            isr_heater_action = 0;
+        }
+    } else if (event == SmartButton::Event::HOLD) {
+        switch (display_status) {
+            case DISPLAY_LIVE:
+                display_status = DISPLAY_GRAPH_TEMPERATURE;
+                break;
+            case DISPLAY_GRAPH_TEMPERATURE:
+                display_status = DISPLAY_GRAPH_PRESSURE;
+                break;
+            case DISPLAY_GRAPH_PRESSURE:
+                display_status = DISPLAY_LIVE;
+                break;
+        }
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     display.init();
-    /*display.clear();
-    display.print_text(0, 0, "T: 20.0");
-    display.print_text(0, 19, "1.0 bar");*/
 
     noInterrupts();
     TCCR1A = 0;
@@ -80,8 +134,9 @@ void setup() {
 
     pinMode(PIN_SSR, OUTPUT);
     digitalWrite(PIN_SSR, LOW);
+
     pinMode(PIN_BTN1, INPUT_PULLUP);
-    pinMode(PIN_BTN2, INPUT_PULLUP);
+    button.begin(button_callback);
 
     heater_action = HEATER_OFF;
     heater_controller.set_target(80);
@@ -105,8 +160,6 @@ void set_ssr(heater_action_t a) {
         // Driving of SSR occurs in TIMER1_OVF ISR
     }
 }
-
-volatile uint8_t isr_heater_action = 0;
 
 /*
  * Python program to calculate TCNT value:
@@ -145,11 +198,33 @@ ISR(TIMER1_OVF_vect)
     }
 }
 
+void draw_graph() {
+}
+
+void draw_temperature_log(uint16_t *temperatures) {
+    char buf[8];
+    sprintf(buf, "%d", RECORD_LOG_SIZE);
+    display.firstPage();
+    do {
+        display.print_text(0, display.getLineY(0), "Temperature Graph");
+        display.print_text(0, display.getLineY(1), buf);
+    } while(display.nextPage());
+}
+
+void draw_pressure_log(uint8_t *pressures) {
+    char buf[8];
+    sprintf(buf, "%d", RECORD_LOG_SIZE);
+    display.firstPage();
+    do {
+        display.print_text(0, display.getLineY(0), "Pressure Graph");
+        display.print_text(0, display.getLineY(1), buf);
+    } while(display.nextPage());
+}
+
 void loop() {
     static char buf[32];
     static char buf_temperature[32], buf_pressure[32], buf_status[16];
 
-    static heater_action_t heater_action = HEATER_OFF;
     static heater_action_t last_heater_action = HEATER_OFF;
     const unsigned int t_target = 80;
 
@@ -159,46 +234,16 @@ void loop() {
     const double temperature = thermocouple.readCelsius();
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
-    static int last_btn = HIGH;
-    static unsigned long last_btn_press_time = 0;
-
     static int log_index = 0;
     static bool record_log = false;
-
-    // Record pressure (in bar * 10) every 0.5 s
-    static uint8_t pressure_log[RECORD_LOG_SIZE];
 
     // Record temperature (in C * 10) every 0.5 s
     static uint16_t temperature_log[RECORD_LOG_SIZE];
 
-    // Handle button press -> turn heating on or off
-    if (digitalRead(PIN_BTN1) == LOW && last_btn == HIGH) { // pressed
-        if ((last_btn_press_time + 200) < m) { // debounce
-            switch (heater_action) {
-                case HEATER_OFF:
-                    heater_action = HEATER_ON;
-                    isr_heater_action = 1;
-                    break;
-                case HEATER_ON:
-                    heater_action = HEATER_25PCT;
-                    isr_heater_action = 2;
-                    break;
-                case HEATER_25PCT:
-                    heater_action = HEATER_7PCT;
-                    isr_heater_action = 3;
-                    break;
-                case HEATER_7PCT:
-                    heater_action = HEATER_OFF;
-                    isr_heater_action = 0;
-                    break;
-            }
+    // Record pressure (in bar * 10) every 0.5 s
+    static uint8_t pressure_log[RECORD_LOG_SIZE];
 
-            last_btn_press_time = m;
-            last_btn = LOW;
-        }
-    } else if (digitalRead(PIN_BTN1) == HIGH && last_btn == LOW) { // released
-        last_btn = HIGH;
-    }
+    SmartButton::service();
 
     // Set SSR based on HeaterController, not direct from button inputs or measured temperature
     // TODO: Use HeaterController (PID)
@@ -252,13 +297,19 @@ void loop() {
         }
         sprintf(buf_status, "%s  %d", buf, log_index);
 
-        // Start drawing display
-        display.firstPage();
-        do {
-            display.print_text(0, display.getLineY(0), buf_temperature);
-            display.print_text(0, display.getLineY(1), buf_pressure);
-            display.print_text(0, display.getLineY(2), buf_status);
-        } while(display.nextPage());
+        if (display_status == DISPLAY_LIVE) {
+            // Start drawing display
+            display.firstPage();
+            do {
+                display.print_text(0, display.getLineY(0), buf_temperature);
+                display.print_text(0, display.getLineY(1), buf_pressure);
+                display.print_text(0, display.getLineY(2), buf_status);
+            } while(display.nextPage());
+        } else if (display_status == DISPLAY_GRAPH_TEMPERATURE) {
+            draw_temperature_log(temperature_log);
+        } else if (display_status == DISPLAY_GRAPH_PRESSURE) {
+            draw_pressure_log(pressure_log);
+        }
 
         // Record temperature and pressure to log
         if (record_log) {
