@@ -30,7 +30,8 @@ enum heater_action_t {
     HEATER_ON,
     HEATER_50PCT,
     HEATER_25PCT,
-    HEATER_12PCT
+    HEATER_12PCT,
+    HEATER_7PCT
 } heater_action; // just what the user input is telling the device, not the actual SSR output
 
 HeaterController heater_controller;
@@ -109,6 +110,12 @@ void set_ssr(heater_action_t a) {
 
 volatile uint8_t isr_heater_action = 0;
 
+/*
+ * Python program to calculate TCNT value:
+ * def calc(p):
+ *   timer_clock = cpu/prescale
+ *   return (65535 - (p * timer_clock), 65535 - ((1-p) * timer_clock))
+ */
 ISR(TIMER1_OVF_vect)
 {
     if (heater_pwm) {
@@ -133,6 +140,12 @@ ISR(TIMER1_OVF_vect)
                 TCNT1 = 63660;
             } else { // off cycle
                 TCNT1 = 51785;
+            }
+        } else if (isr_heater_action == 5) { // 7%
+            if (current_ssr_output) { // on cycle
+                TCNT1 = 64441;
+            } else { // off cycle
+                TCNT1 = 51004;
             }
         } else {
             TCNT1 = 57723;
@@ -189,6 +202,10 @@ void loop() {
                     isr_heater_action = 4;
                     break;
                 case HEATER_12PCT:
+                    heater_action = HEATER_7PCT;
+                    isr_heater_action = 5;
+                    break;
+                case HEATER_7PCT:
                     heater_action = HEATER_OFF;
                     isr_heater_action = 0;
                     break;
@@ -249,6 +266,9 @@ void loop() {
                 break;
             case HEATER_12PCT:
                 strcpy(buf, "12%");
+                break;
+            case HEATER_7PCT:
+                strcpy(buf, " 7%");
                 break;
             default:
                 strcpy(buf, "OFF");
