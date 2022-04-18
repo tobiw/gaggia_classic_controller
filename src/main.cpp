@@ -343,8 +343,14 @@ void loop() {
 
         // Record temperature and pressure to log
         if (record_log) {
-            temperature_log[log_index] = (uint16_t)(temperature * 10.0);
-            pressure_log[log_index] = (uint16_t)(pressure_bar * 10.0);
+            // Filter out values outside of 10C to 150C range
+            if (temperature < 150 && temperature > 10)
+                temperature_log[log_index] = (uint16_t)(temperature * 10.0);
+
+            // Filter out values outside of 0 to 15 bar range
+            if (pressure_bar < 15 && pressure_bar > 0)
+                pressure_log[log_index] = (uint16_t)(pressure_bar * 10.0);
+
             log_index++;
             if (log_index >= RECORD_LOG_SIZE) {
                 record_log = false;

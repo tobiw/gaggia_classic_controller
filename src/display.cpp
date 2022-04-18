@@ -91,7 +91,7 @@ void Display::draw_graph(const char *title, uint16_t *data, size_t datalen, uint
     const int data_range = max - min;
     const double y_factor = (double)graph_y_size / (double)data_range;
 
-    uint16_t max_value = data[0];
+    double max_value = data[0] / 10.0;
     char buf[8];
 
     // Small text
@@ -105,12 +105,15 @@ void Display::draw_graph(const char *title, uint16_t *data, size_t datalen, uint
         tft->drawLine(5, 10, 5, graph_bottom); // Y
 
         for (unsigned int i = 1; i < datalen; i++) {
-            if (data[i] > max_value) max_value = data[i];
+            const double d = data[i] / 10.0;
+            const double prev_d = data[i-1] / 10.0;
 
-            tft->drawLine(5+((i-1)*x_factor), graph_bottom-(int)(data[i-1]*y_factor), 5+(i*x_factor), graph_bottom-(int)(data[i]*y_factor));
+            if (d > max_value) max_value = d;
+
+            tft->drawLine(5+((i-1)*x_factor), graph_bottom-(int)(prev_d*y_factor), 5+(i*x_factor), graph_bottom-(int)(d*y_factor));
         }
 
-        sprintf(buf, "%u", max_value);
+        dtostrf(max_value, 2, 1, buf);
         print_text(100, 8, buf);
         sprintf(buf, "%u", datalen / 2);
         print_text(60, 62, buf);
