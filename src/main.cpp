@@ -1,9 +1,9 @@
 #include <Arduino.h>
 
-#include "max6675.h"
+//#include "max6675.h"
 #include "SmartButton.h"
 
-#include "heater_controller.h"
+//#include "heater_controller.h"
 #include "display.h"
 
 #define PIN_SDA 2
@@ -17,20 +17,14 @@
 #define PIN_LED_B 21
 
 #define DISPLAY_UPDATE_INTERVAL 500
-#define RECORD_LOG_SIZE 32
+#define RECORD_LOG_SIZE 80
 
 enum display_status_t {
     DISPLAY_WARMUP_TIMER = 0,
     DISPLAY_LIVE,
+    DISPLAY_BREWING,
     DISPLAY_GRAPH_TEMPERATURE,
     DISPLAY_GRAPH_PRESSURE,
-};
-
-enum heating_status_t {
-    STATUS_COLD = 0,
-    STATUS_HEATING,
-    STATUS_NEAR_TARGET,
-    STATUS_HOT
 };
 
 enum heater_action_t {
@@ -42,14 +36,15 @@ enum heater_action_t {
 
 // Globals
 display_status_t display_status = DISPLAY_WARMUP_TIMER;
-heater_action_t heater_action = HEATER_OFF;
-volatile uint8_t isr_heater_action = 0;
+heater_action_t heater_action = HEATER_ON;
+volatile uint8_t isr_heater_action = 1;
+bool record_log = false;
 
-HeaterController heater_controller;
+//HeaterController heater_controller;
 
 Display display;
 
-MAX6675 thermocouple(15, 10, 14); // SCK, CS, MISO
+//MAX6675 thermocouple(15, 10, 14); // SCK, CS, MISO
 
 using namespace smartbutton;
 SmartButton button(PIN_BTN1, SmartButton::InputType::NORMAL_HIGH);
@@ -66,44 +61,72 @@ void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
     }
 }
 
+void goto_next_heater_action() {
+    switch (heater_action) {
+        case HEATER_OFF:
+            heater_action = HEATER_ON;
+            isr_heater_action = 1;
+            break;
+        case HEATER_ON:
+            heater_action = HEATER_25PCT;
+            isr_heater_action = 2;
+            break;
+        case HEATER_25PCT:
+            heater_action = HEATER_7PCT;
+            isr_heater_action = 3;
+            break;
+        case HEATER_7PCT:
+            heater_action = HEATER_OFF;
+            isr_heater_action = 0;
+            break;
+    }
+}
+
 void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
     if (event == SmartButton::Event::CLICK) {
         if (clicks == 1) {
-            switch (heater_action) {
-                case HEATER_OFF:
-                    heater_action = HEATER_ON;
-                    isr_heater_action = 1;
+            switch (display_status) {
+                /*case DISPLAY_WARMUP_TIMER: // click on warmup screen advances to Live Status page
+                    display_status = DISPLAY_LIVE;
+                    break;*/
+                case DISPLAY_WARMUP_TIMER: // TODO: remove once PID is active
+                case DISPLAY_LIVE: // only switch heater action on Live Status or Brewing pages
+                case DISPLAY_BREWING:
+                    goto_next_heater_action();
                     break;
-                case HEATER_ON:
-                    heater_action = HEATER_25PCT;
-                    isr_heater_action = 2;
+                case DISPLAY_GRAPH_TEMPERATURE: // switch between graphs
+                    display_status = DISPLAY_GRAPH_PRESSURE;
                     break;
-                case HEATER_25PCT:
-                    heater_action = HEATER_7PCT;
-                    isr_heater_action = 3;
-                    break;
-                case HEATER_7PCT:
-                    heater_action = HEATER_OFF;
-                    isr_heater_action = 0;
+                case DISPLAY_GRAPH_PRESSURE: // switch between graphs
+                    display_status = DISPLAY_GRAPH_TEMPERATURE;
                     break;
             }
-        } else if (clicks == 2) {
-            heater_action = HEATER_OFF;
-            isr_heater_action = 0;
         }
     } else if (event == SmartButton::Event::HOLD) {
         switch (display_status) {
-            case DISPLAY_WARMUP_TIMER:
+            case DISPLAY_WARMUP_TIMER: // TODO: remove once PID is active
                 display_status = DISPLAY_LIVE;
+                heater_action = HEATER_7PCT;
+                isr_heater_action = 3;
                 break;
             case DISPLAY_LIVE:
+                display_status = DISPLAY_BREWING;
+                heater_action = HEATER_25PCT;
+                isr_heater_action = 2;
+                record_log = true;
+                break;
+            case DISPLAY_BREWING:
                 display_status = DISPLAY_GRAPH_TEMPERATURE;
+                heater_action = HEATER_OFF;
+                isr_heater_action = 0;
+                record_log = false;
                 break;
             case DISPLAY_GRAPH_TEMPERATURE:
-                display_status = DISPLAY_GRAPH_PRESSURE;
-                break;
             case DISPLAY_GRAPH_PRESSURE:
-                display_status = DISPLAY_WARMUP_TIMER;
+                display_status = DISPLAY_LIVE; // exit graph view, don't go back to warmup timer
+                break;
+            //case DISPLAY_WARMUP_TIMER:
+            default:
                 break;
         }
     }
@@ -142,8 +165,7 @@ void setup() {
     pinMode(PIN_BTN1, INPUT_PULLUP);
     button.begin(button_callback);
 
-    heater_action = HEATER_OFF;
-    heater_controller.set_target(80);
+    //heater_controller.set_target(80);
 }
 
 volatile bool heater_pwm = false;
@@ -218,7 +240,7 @@ void get_buf_pressure(char *buf_pressure, double pressure_bar) {
     sprintf(buf_pressure, "%s bar", buf);
 }
 
-void get_buf_status(char *buf_status, heater_action_t heater_action, int log_index) {
+void get_buf_status(char *buf_status, heater_action_t heater_action, int log_index, bool record_log) {
     char buf[8];
     switch (heater_action) {
         case HEATER_ON:
@@ -234,7 +256,11 @@ void get_buf_status(char *buf_status, heater_action_t heater_action, int log_ind
             strcpy(buf, "OFF");
             break;
     }
-    sprintf(buf_status, "%s  %d", buf, log_index);
+    if (display_status == DISPLAY_WARMUP_TIMER) { // simplified status
+        sprintf(buf_status, "%s", buf);
+    } else {
+        sprintf(buf_status, "%s  %d %s", buf, log_index, record_log ? "R" : "-");
+    }
 }
 
 void get_buf_timer(char *buf_timer, unsigned long m) {
@@ -244,7 +270,7 @@ void get_buf_timer(char *buf_timer, unsigned long m) {
 }
 
 void loop() {
-    static char buf_temperature[16], buf_pressure[10], buf_status[8], buf_timer[8];
+    static char buf_temperature[16], buf_pressure[10], buf_status[16], buf_timer[8];
 
     static heater_action_t last_heater_action = HEATER_OFF;
     const unsigned int t_target = 80;
@@ -252,17 +278,16 @@ void loop() {
     static unsigned long last_update_time = 0;
     const unsigned long m = millis();
 
-    const double temperature = thermocouple.readCelsius();
+    const double temperature = 20;//thermocouple.readCelsius();
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
     static int log_index = 0;
-    static bool record_log = false;
 
     // Record temperature (in C * 10) every 0.5 s
-    static uint16_t temperature_log[] = { 20, 20, 20, 20, 18, 40, 60, 80, 90, 90, 88, 86, 85, 82, 82, 80, 78, 76, 74, 70, 60, 50, 40, 30, 25, 20, 18 };
+    static uint16_t temperature_log[RECORD_LOG_SIZE];
 
     // Record pressure (in bar * 10) every 0.5 s
-    static uint16_t pressure_log[] = { 1, 1, 1, 5, 6, 10, 10, 11, 9, 9, 8, 8, 8, 6, 5, 1, 1, 1, 1, 1, 1, 1 };
+    static uint16_t pressure_log[RECORD_LOG_SIZE];
 
     SmartButton::service();
 
@@ -295,17 +320,25 @@ void loop() {
 
         get_buf_temperature(buf_temperature, temperature, display_status == DISPLAY_WARMUP_TIMER ? 0 : t_target);
         get_buf_pressure(buf_pressure, pressure_bar);
-        get_buf_status(buf_status, heater_action, log_index);
+        get_buf_status(buf_status, heater_action, log_index, record_log);
         get_buf_timer(buf_timer, m);
 
-        if (display_status == DISPLAY_WARMUP_TIMER) {
-            display.draw_warmup_timer(buf_temperature, buf_timer);
-        } else if (display_status == DISPLAY_LIVE) {
-            display.draw_live_status(buf_temperature, buf_pressure, buf_status);
-        } else if (display_status == DISPLAY_GRAPH_TEMPERATURE) {
-            display.draw_graph("Temp", temperature_log, sizeof (temperature_log) / sizeof (uint16_t), 10, 120);
-        } else if (display_status == DISPLAY_GRAPH_PRESSURE) {
-            display.draw_graph("Pres", pressure_log, sizeof (pressure_log) / sizeof (uint16_t), 0, 14);
+        switch (display_status) {
+            case DISPLAY_WARMUP_TIMER:
+                display.draw_warmup_timer(buf_temperature, buf_timer, buf_status);
+                break;
+            case DISPLAY_LIVE:
+                display.draw_live_status("Live", buf_temperature, buf_pressure, buf_status);
+                break;
+            case DISPLAY_BREWING:
+                display.draw_live_status("Brew", buf_temperature, buf_pressure, buf_status);
+                break;
+            case DISPLAY_GRAPH_TEMPERATURE:
+                display.draw_graph("Temp", temperature_log, log_index, 10, 120);
+                break;
+            case DISPLAY_GRAPH_PRESSURE:
+                display.draw_graph("Pres", pressure_log, log_index, 0, 14);
+                break;
         }
 
         // Record temperature and pressure to log
@@ -315,7 +348,6 @@ void loop() {
             log_index++;
             if (log_index >= RECORD_LOG_SIZE) {
                 record_log = false;
-                log_index = 0;
             }
         }
 

@@ -49,27 +49,29 @@ int Display::getLineY(int i) {
     return (i+1) * 20;
 }
 
-void Display::draw_warmup_timer(char *buf_temperature, char *buf_timer)
+void Display::draw_warmup_timer(char *buf_temperature, char *buf_timer, char *buf_status)
 {
     tft->firstPage();
     do {
         // Big text size
         set_font_size(18);
-        print_text(0, 40, buf_timer);
+        print_text(30, 30, buf_timer);
 
         // Normal text size
         set_font_size(13);
-        print_text(0, 60, buf_temperature);
+        print_text(40, 60, buf_temperature);
+        print_text(75, 60, buf_status);
     } while(tft->nextPage());
 }
 
-void Display::draw_live_status(char *buf_temperature, char *buf_pressure, char *buf_status)
+void Display::draw_live_status(const char *title, char *buf_temperature, char *buf_pressure, char *buf_status)
 {
-    // Normal text size
-    set_font_size(13);
-
     tft->firstPage();
     do {
+        set_font_size(8);
+        print_text(94, 16, title);
+
+        set_font_size(13);
         print_text(0, getLineY(0), buf_temperature);
         print_text(0, getLineY(1), buf_pressure);
         print_text(0, getLineY(2), buf_status);
@@ -109,7 +111,7 @@ void Display::draw_graph(const char *title, uint16_t *data, size_t datalen, uint
         }
 
         sprintf(buf, "%u", max_value);
-        print_text(110, 8, buf);
+        print_text(100, 8, buf);
         sprintf(buf, "%u", datalen / 2);
         print_text(60, 62, buf);
     } while(tft->nextPage());
