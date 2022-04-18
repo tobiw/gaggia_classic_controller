@@ -22,10 +22,9 @@ class Display {
         void draw_glyph(int x, int y, unsigned int glyph);
         void draw_rect(int x, int y, int w, int h, int color);
         int getLineY(int i);
-        void firstPage();
-        int nextPage();
 
         // Complex display
+        void draw_warmup_timer(char *buf_temperature, char *buf_timer);
         void draw_live_status(char *buf_temperature, char *buf_pressure, char *buf_status);
         void draw_graph(const char *title, uint16_t *data, size_t datale, uint16_t min, uint16_t max);
 

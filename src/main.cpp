@@ -20,9 +20,10 @@
 #define RECORD_LOG_SIZE 32
 
 enum display_status_t {
-    DISPLAY_LIVE = 0,
+    DISPLAY_WARMUP_TIMER = 0,
+    DISPLAY_LIVE,
     DISPLAY_GRAPH_TEMPERATURE,
-    DISPLAY_GRAPH_PRESSURE
+    DISPLAY_GRAPH_PRESSURE,
 };
 
 enum heating_status_t {
@@ -40,7 +41,7 @@ enum heater_action_t {
 }; // just what the user input is telling the device, not the actual SSR output
 
 // Globals
-display_status_t display_status = DISPLAY_LIVE;
+display_status_t display_status = DISPLAY_WARMUP_TIMER;
 heater_action_t heater_action = HEATER_OFF;
 volatile uint8_t isr_heater_action = 0;
 
@@ -92,6 +93,9 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
         }
     } else if (event == SmartButton::Event::HOLD) {
         switch (display_status) {
+            case DISPLAY_WARMUP_TIMER:
+                display_status = DISPLAY_LIVE;
+                break;
             case DISPLAY_LIVE:
                 display_status = DISPLAY_GRAPH_TEMPERATURE;
                 break;
@@ -99,7 +103,7 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
                 display_status = DISPLAY_GRAPH_PRESSURE;
                 break;
             case DISPLAY_GRAPH_PRESSURE:
-                display_status = DISPLAY_LIVE;
+                display_status = DISPLAY_WARMUP_TIMER;
                 break;
         }
     }
@@ -198,9 +202,49 @@ ISR(TIMER1_OVF_vect)
     }
 }
 
+void get_buf_temperature(char *buf_temperature, double temperature, unsigned int t_target) {
+    char buf[8];
+    dtostrf(temperature, 3, 1, buf);
+    if (t_target == 0) {
+        sprintf(buf_temperature, "%sC", buf);
+    } else {
+        sprintf(buf_temperature, "%sC (%uC)", buf, t_target);
+    }
+}
+
+void get_buf_pressure(char *buf_pressure, double pressure_bar) {
+    char buf[8];
+    dtostrf(pressure_bar, 2, 1, buf);
+    sprintf(buf_pressure, "%s bar", buf);
+}
+
+void get_buf_status(char *buf_status, heater_action_t heater_action, int log_index) {
+    char buf[8];
+    switch (heater_action) {
+        case HEATER_ON:
+            strcpy(buf, " ON");
+            break;
+        case HEATER_25PCT:
+            strcpy(buf, "25%");
+            break;
+        case HEATER_7PCT:
+            strcpy(buf, " 7%");
+            break;
+        default:
+            strcpy(buf, "OFF");
+            break;
+    }
+    sprintf(buf_status, "%s  %d", buf, log_index);
+}
+
+void get_buf_timer(char *buf_timer, unsigned long m) {
+    unsigned int m_min = (unsigned int)((m / 1000) / 60);
+    unsigned int m_sec = (unsigned int)((m / 1000) % 60);
+    sprintf(buf_timer, "%02u:%02u", m_min, m_sec);
+}
+
 void loop() {
-    static char buf[32];
-    static char buf_temperature[32], buf_pressure[32], buf_status[16];
+    static char buf_temperature[16], buf_pressure[10], buf_status[8], buf_timer[8];
 
     static heater_action_t last_heater_action = HEATER_OFF;
     const unsigned int t_target = 80;
@@ -249,32 +293,14 @@ void loop() {
         Serial.print(" bar ");
         Serial.println(pressure_bar);
 
-        // First line: temperature
-        dtostrf(temperature, 3, 1, buf);
-        sprintf(buf_temperature, "%sC (%uC)", buf, t_target);
+        get_buf_temperature(buf_temperature, temperature, display_status == DISPLAY_WARMUP_TIMER ? 0 : t_target);
+        get_buf_pressure(buf_pressure, pressure_bar);
+        get_buf_status(buf_status, heater_action, log_index);
+        get_buf_timer(buf_timer, m);
 
-        // Second line: pressure
-        dtostrf(pressure_bar, 2, 1, buf);
-        sprintf(buf_pressure, "%s bar", buf);
-
-        // Third line: status
-        switch (heater_action) {
-            case HEATER_ON:
-                strcpy(buf, " ON");
-                break;
-            case HEATER_25PCT:
-                strcpy(buf, "25%");
-                break;
-            case HEATER_7PCT:
-                strcpy(buf, " 7%");
-                break;
-            default:
-                strcpy(buf, "OFF");
-                break;
-        }
-        sprintf(buf_status, "%s  %d", buf, log_index);
-
-        if (display_status == DISPLAY_LIVE) {
+        if (display_status == DISPLAY_WARMUP_TIMER) {
+            display.draw_warmup_timer(buf_temperature, buf_timer);
+        } else if (display_status == DISPLAY_LIVE) {
             display.draw_live_status(buf_temperature, buf_pressure, buf_status);
         } else if (display_status == DISPLAY_GRAPH_TEMPERATURE) {
             display.draw_graph("Temp", temperature_log, sizeof (temperature_log) / sizeof (uint16_t), 10, 120);

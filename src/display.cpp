@@ -8,10 +8,13 @@ void Display::set_font_size(uint8_t size)
 {
     switch (size) {
         case 10:
-            tft->setFont(u8g2_font_6x10_tf);
+            tft->setFont(u8g2_font_6x10_tr);
             break;
         case 13:
-            tft->setFont(u8g2_font_6x13_tf);
+            tft->setFont(u8g2_font_6x13_tr);
+            break;
+        case 18:
+            tft->setFont(u8g2_font_ncenB18_tr);
             break;
     }
 }
@@ -46,12 +49,18 @@ int Display::getLineY(int i) {
     return (i+1) * 20;
 }
 
-void Display::firstPage() {
+void Display::draw_warmup_timer(char *buf_temperature, char *buf_timer)
+{
     tft->firstPage();
-}
+    do {
+        // Big text size
+        set_font_size(18);
+        print_text(0, 40, buf_timer);
 
-int Display::nextPage() {
-    return tft->nextPage();
+        // Normal text size
+        set_font_size(13);
+        print_text(0, 60, buf_temperature);
+    } while(tft->nextPage());
 }
 
 void Display::draw_live_status(char *buf_temperature, char *buf_pressure, char *buf_status)
