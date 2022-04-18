@@ -17,7 +17,7 @@
 #define PIN_LED_B 21
 
 #define DISPLAY_UPDATE_INTERVAL 500
-#define RECORD_LOG_SIZE 32
+#define RECORD_LOG_SIZE 16
 
 enum display_status_t {
     DISPLAY_LIVE = 0,
@@ -198,29 +198,6 @@ ISR(TIMER1_OVF_vect)
     }
 }
 
-void draw_graph() {
-}
-
-void draw_temperature_log(uint16_t *temperatures) {
-    char buf[8];
-    sprintf(buf, "%d", RECORD_LOG_SIZE);
-    display.firstPage();
-    do {
-        display.print_text(0, display.getLineY(0), "Temperature Graph");
-        display.print_text(0, display.getLineY(1), buf);
-    } while(display.nextPage());
-}
-
-void draw_pressure_log(uint8_t *pressures) {
-    char buf[8];
-    sprintf(buf, "%d", RECORD_LOG_SIZE);
-    display.firstPage();
-    do {
-        display.print_text(0, display.getLineY(0), "Pressure Graph");
-        display.print_text(0, display.getLineY(1), buf);
-    } while(display.nextPage());
-}
-
 void loop() {
     static char buf[32];
     static char buf_temperature[32], buf_pressure[32], buf_status[16];
@@ -238,10 +215,10 @@ void loop() {
     static bool record_log = false;
 
     // Record temperature (in C * 10) every 0.5 s
-    static uint16_t temperature_log[RECORD_LOG_SIZE];
+    static uint16_t temperature_log[RECORD_LOG_SIZE] = { 20, 20, 20, 20, 18, 40, 60, 80, 90, 90, 88, 86, 85, 82, 82, 80 };
 
     // Record pressure (in bar * 10) every 0.5 s
-    static uint8_t pressure_log[RECORD_LOG_SIZE];
+    static uint16_t pressure_log[RECORD_LOG_SIZE] = { 1, 1, 1, 5, 6, 10, 10, 11, 9, 9, 8, 8, 8, 6, 5, 1 };
 
     SmartButton::service();
 
@@ -298,23 +275,17 @@ void loop() {
         sprintf(buf_status, "%s  %d", buf, log_index);
 
         if (display_status == DISPLAY_LIVE) {
-            // Start drawing display
-            display.firstPage();
-            do {
-                display.print_text(0, display.getLineY(0), buf_temperature);
-                display.print_text(0, display.getLineY(1), buf_pressure);
-                display.print_text(0, display.getLineY(2), buf_status);
-            } while(display.nextPage());
+            display.draw_live_status(buf_temperature, buf_pressure, buf_status);
         } else if (display_status == DISPLAY_GRAPH_TEMPERATURE) {
-            draw_temperature_log(temperature_log);
+            display.draw_graph("Temp", temperature_log, 16, 10, 120);
         } else if (display_status == DISPLAY_GRAPH_PRESSURE) {
-            draw_pressure_log(pressure_log);
+            display.draw_graph("Pres", pressure_log, 16, 0, 14);
         }
 
         // Record temperature and pressure to log
         if (record_log) {
             temperature_log[log_index] = (uint16_t)(temperature * 10.0);
-            pressure_log[log_index] = (uint8_t)(pressure_bar * 10.0);
+            pressure_log[log_index] = (uint16_t)(pressure_bar * 10.0);
             log_index++;
             if (log_index >= RECORD_LOG_SIZE) {
                 record_log = false;
