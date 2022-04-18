@@ -17,7 +17,7 @@
 #define PIN_LED_B 21
 
 #define DISPLAY_UPDATE_INTERVAL 500
-#define RECORD_LOG_SIZE 16
+#define RECORD_LOG_SIZE 32
 
 enum display_status_t {
     DISPLAY_LIVE = 0,
@@ -215,10 +215,10 @@ void loop() {
     static bool record_log = false;
 
     // Record temperature (in C * 10) every 0.5 s
-    static uint16_t temperature_log[RECORD_LOG_SIZE] = { 20, 20, 20, 20, 18, 40, 60, 80, 90, 90, 88, 86, 85, 82, 82, 80 };
+    static uint16_t temperature_log[] = { 20, 20, 20, 20, 18, 40, 60, 80, 90, 90, 88, 86, 85, 82, 82, 80, 78, 76, 74, 70, 60, 50, 40, 30, 25, 20, 18 };
 
     // Record pressure (in bar * 10) every 0.5 s
-    static uint16_t pressure_log[RECORD_LOG_SIZE] = { 1, 1, 1, 5, 6, 10, 10, 11, 9, 9, 8, 8, 8, 6, 5, 1 };
+    static uint16_t pressure_log[] = { 1, 1, 1, 5, 6, 10, 10, 11, 9, 9, 8, 8, 8, 6, 5, 1, 1, 1, 1, 1, 1, 1 };
 
     SmartButton::service();
 
@@ -277,9 +277,9 @@ void loop() {
         if (display_status == DISPLAY_LIVE) {
             display.draw_live_status(buf_temperature, buf_pressure, buf_status);
         } else if (display_status == DISPLAY_GRAPH_TEMPERATURE) {
-            display.draw_graph("Temp", temperature_log, 16, 10, 120);
+            display.draw_graph("Temp", temperature_log, sizeof (temperature_log) / sizeof (uint16_t), 10, 120);
         } else if (display_status == DISPLAY_GRAPH_PRESSURE) {
-            display.draw_graph("Pres", pressure_log, 16, 0, 14);
+            display.draw_graph("Pres", pressure_log, sizeof (pressure_log) / sizeof (uint16_t), 0, 14);
         }
 
         // Record temperature and pressure to log

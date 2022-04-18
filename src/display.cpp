@@ -4,15 +4,23 @@ Display::Display()
 {
 }
 
-void Display::reset_font()
+void Display::set_font_size(uint8_t size)
 {
-    tft->setFont(u8g_font_unifont);
+    switch (size) {
+        case 10:
+            tft->setFont(u8g2_font_6x10_tf);
+            break;
+        case 13:
+            tft->setFont(u8g2_font_6x13_tf);
+            break;
+    }
 }
 
 void Display::init()
 {
-    tft = new U8GLIB_SSD1306_128X64(U8G_I2C_OPT_NONE);
-    reset_font();
+    tft = new U8G2_SSD1306_128X64_NONAME_F_HW_I2C(U8G2_R0, U8X8_PIN_NONE);
+    tft->begin();
+    set_font_size(13);
 }
 
 void Display::clear()
@@ -22,6 +30,11 @@ void Display::clear()
 void Display::print_text(int x, int y, const char *s)
 {
     tft->drawStr(x+4, y, s);
+}
+
+void Display::draw_glyph(int x, int y, unsigned int glyph)
+{
+    tft->drawGlyph(x, y, glyph);
 }
 
 void Display::draw_rect(int x, int y, int w, int h, int color)
@@ -43,6 +56,9 @@ int Display::nextPage() {
 
 void Display::draw_live_status(char *buf_temperature, char *buf_pressure, char *buf_status)
 {
+    // Normal text size
+    set_font_size(13);
+
     tft->firstPage();
     do {
         print_text(0, getLineY(0), buf_temperature);
@@ -67,9 +83,11 @@ void Display::draw_graph(const char *title, uint16_t *data, size_t datalen, uint
     uint16_t max_value = data[0];
     char buf[8];
 
+    // Small text
+    set_font_size(10);
+
     tft->firstPage();
     do {
-        tft->setFont(u8g_font_5x7);
         print_text(0, 8, title);
 
         tft->drawLine(5, graph_bottom, 5+graph_x_size, graph_bottom); // X
@@ -82,9 +100,8 @@ void Display::draw_graph(const char *title, uint16_t *data, size_t datalen, uint
         }
 
         sprintf(buf, "%u", max_value);
-        print_text(100, 8, buf);
+        print_text(110, 8, buf);
         sprintf(buf, "%u", datalen / 2);
-        print_text(50, 62, buf);
-        reset_font();
+        print_text(60, 62, buf);
     } while(tft->nextPage());
 }
