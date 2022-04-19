@@ -39,6 +39,8 @@ display_status_t display_status = DISPLAY_WARMUP_TIMER;
 heater_action_t heater_action = HEATER_ON;
 volatile uint8_t isr_heater_action = 1;
 bool record_log = false;
+unsigned int log_index = 0;
+unsigned long brew_timer = 0;
 
 //HeaterController heater_controller;
 
@@ -113,17 +115,25 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
                 display_status = DISPLAY_BREWING;
                 heater_action = HEATER_25PCT;
                 isr_heater_action = 2;
+
+                // Started brewing: enable recording
                 record_log = true;
                 break;
             case DISPLAY_BREWING:
                 display_status = DISPLAY_GRAPH_TEMPERATURE;
                 heater_action = HEATER_OFF;
                 isr_heater_action = 0;
+
+                // Brewing done: disable recording
                 record_log = false;
                 break;
             case DISPLAY_GRAPH_TEMPERATURE:
             case DISPLAY_GRAPH_PRESSURE:
                 display_status = DISPLAY_LIVE; // exit graph view, don't go back to warmup timer
+
+                // Reset recording and timer for another Live->Brew cycle
+                log_index = 0;
+                brew_timer = 0;
                 break;
             //case DISPLAY_WARMUP_TIMER:
             default:
@@ -240,7 +250,7 @@ void get_buf_pressure(char *buf_pressure, double pressure_bar) {
     sprintf(buf_pressure, "%s bar", buf);
 }
 
-void get_buf_status(char *buf_status, heater_action_t heater_action, int log_index, bool record_log) {
+void get_buf_status(char *buf_status, heater_action_t heater_action, bool record_log) {
     char buf[8];
     switch (heater_action) {
         case HEATER_ON:
@@ -258,15 +268,21 @@ void get_buf_status(char *buf_status, heater_action_t heater_action, int log_ind
     }
     if (display_status == DISPLAY_WARMUP_TIMER) { // simplified status
         sprintf(buf_status, "%s", buf);
+    } else if (display_status == DISPLAY_BREWING) {
+        sprintf(buf_status, "%s  %s", buf, record_log ? "Rec" : "");
     } else {
-        sprintf(buf_status, "%s  %d %s", buf, log_index, record_log ? "R" : "-");
+        strcpy(buf_status, buf);
     }
 }
 
 void get_buf_timer(char *buf_timer, unsigned long m) {
-    unsigned int m_min = (unsigned int)((m / 1000) / 60);
-    unsigned int m_sec = (unsigned int)((m / 1000) % 60);
-    sprintf(buf_timer, "%02u:%02u", m_min, m_sec);
+    if (display_status == DISPLAY_WARMUP_TIMER) {
+        unsigned int m_min = (unsigned int)((m / 1000) / 60);
+        unsigned int m_sec = (unsigned int)((m / 1000) % 60);
+        sprintf(buf_timer, "%02u:%02u", m_min, m_sec);
+    } else { // Brew Status
+        sprintf(buf_timer, "%02u", m);
+    }
 }
 
 void loop() {
@@ -276,12 +292,11 @@ void loop() {
     const unsigned int t_target = 80;
 
     static unsigned long last_update_time = 0;
+    static unsigned long last_brew_timer_update = 0;
     const unsigned long m = millis();
 
     const double temperature = 20;//thermocouple.readCelsius();
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
-
-    static int log_index = 0;
 
     // Record temperature (in C * 10) every 0.5 s
     static uint16_t temperature_log[RECORD_LOG_SIZE];
@@ -300,38 +315,37 @@ void loop() {
         last_heater_action = heater_action;
     }
 
+    // Increment brew timer if in brewing mode
+
     // Only update Serial and display once per second
     if ((last_update_time + DISPLAY_UPDATE_INTERVAL) < m) {
+        // Increment brew timer by one second if in brewing mode
+        if (display_status == DISPLAY_BREWING && (last_brew_timer_update + 1000) < m) {
+            last_brew_timer_update = m;
+            brew_timer++;
+        }
+
         // Pressure conversion
         // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar
         // voltage range of sensor is 0.5-4.5V = 4V
         double pressure_V = pressure_raw * (5.0 / 1024.0); // factor is (maxV / maxDigitalValue)
         double pressure_bar = (pressure_V - 0.17) * 3.0; // subtract 1 bar pressure voltage and apply conversion factor
 
-        // Serial monitor output
-        Serial.print("LOOP: heater");
-        Serial.print(heater_action);
-        Serial.print(" ADC ");
-        Serial.print(pressure_raw);
-        Serial.print(" V ");
-        Serial.print(pressure_V);
-        Serial.print(" bar ");
-        Serial.println(pressure_bar);
-
+        // Populate display buffers (TODO: only run what's required for current display mode)
         get_buf_temperature(buf_temperature, temperature, display_status == DISPLAY_WARMUP_TIMER ? 0 : t_target);
         get_buf_pressure(buf_pressure, pressure_bar);
-        get_buf_status(buf_status, heater_action, log_index, record_log);
-        get_buf_timer(buf_timer, m);
+        get_buf_status(buf_status, heater_action, record_log);
+        get_buf_timer(buf_timer, display_status == DISPLAY_WARMUP_TIMER ? m : brew_timer);
 
         switch (display_status) {
             case DISPLAY_WARMUP_TIMER:
                 display.draw_warmup_timer(buf_temperature, buf_timer, buf_status);
                 break;
             case DISPLAY_LIVE:
-                display.draw_live_status("Live", buf_temperature, buf_pressure, buf_status);
+                display.draw_live_status(buf_temperature, buf_pressure, buf_status);
                 break;
             case DISPLAY_BREWING:
-                display.draw_live_status("Brew", buf_temperature, buf_pressure, buf_status);
+                display.draw_brew_status(buf_temperature, buf_pressure, buf_status, buf_timer);
                 break;
             case DISPLAY_GRAPH_TEMPERATURE:
                 display.draw_graph("Temp", temperature_log, log_index, 10, 120);
@@ -354,6 +368,9 @@ void loop() {
             log_index++;
             if (log_index >= RECORD_LOG_SIZE) {
                 record_log = false;
+                display_status = DISPLAY_GRAPH_TEMPERATURE;
+                heater_action = HEATER_OFF;
+                isr_heater_action = 0;
             }
         }
 

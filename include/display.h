@@ -25,7 +25,8 @@ class Display {
 
         // Complex display
         void draw_warmup_timer(char *buf_temperature, char *buf_timer, char *buf_status);
-        void draw_live_status(const char *title, char *buf_temperature, char *buf_pressure, char *buf_status);
+        void draw_live_status(char *buf_temperature, char *buf_pressure, char *buf_status);
+        void draw_brew_status(char *buf_temperature, char *buf_pressure, char *buf_status, char *buf_timer);
         void draw_graph(const char *title, uint16_t *data, size_t datale, uint16_t min, uint16_t max);
 
     private:
