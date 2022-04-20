@@ -9,7 +9,7 @@
 #define PIN_SDA 2
 #define PIN_SCL 3
 #define PIN_BTN1 4
-#define PIN_BTN2 7
+#define PIN_BREW_SWITCH 7
 #define PIN_SSR 5
 #define PIN_ADC_PRESSURE A0
 #define PIN_LED_R 19
@@ -38,7 +38,6 @@ enum heater_action_t {
 display_status_t display_status = DISPLAY_WARMUP_TIMER;
 heater_action_t heater_action = HEATER_ON;
 volatile uint8_t isr_heater_action = 1;
-bool record_log = false;
 unsigned int log_index = 0;
 unsigned long brew_timer = 0;
 
@@ -84,6 +83,27 @@ void goto_next_heater_action() {
     }
 }
 
+void goto_mode(display_status_t new_status) {
+    display_status = new_status;
+    switch (display_status) {
+        case DISPLAY_LIVE:
+            heater_action = HEATER_7PCT;
+            isr_heater_action = 3;
+            // Prepare logging and timer for brewing
+            log_index = 0;
+            brew_timer = 0;
+            break;
+        case DISPLAY_BREWING:
+            heater_action = HEATER_25PCT;
+            isr_heater_action = 2;
+            break;
+        case DISPLAY_GRAPH_TEMPERATURE:
+            heater_action = HEATER_OFF;
+            isr_heater_action = 0;
+            break;
+    }
+}
+
 void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
     if (event == SmartButton::Event::CLICK) {
         if (clicks == 1) {
@@ -107,33 +127,17 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
     } else if (event == SmartButton::Event::HOLD) {
         switch (display_status) {
             case DISPLAY_WARMUP_TIMER: // TODO: remove once PID is active
-                display_status = DISPLAY_LIVE;
-                heater_action = HEATER_7PCT;
-                isr_heater_action = 3;
+                goto_mode(DISPLAY_LIVE);
                 break;
             case DISPLAY_LIVE:
-                display_status = DISPLAY_BREWING;
-                heater_action = HEATER_25PCT;
-                isr_heater_action = 2;
-
-                // Started brewing: enable recording
-                record_log = true;
+                goto_mode(DISPLAY_BREWING);
                 break;
             case DISPLAY_BREWING:
-                display_status = DISPLAY_GRAPH_TEMPERATURE;
-                heater_action = HEATER_OFF;
-                isr_heater_action = 0;
-
-                // Brewing done: disable recording
-                record_log = false;
+                goto_mode(DISPLAY_GRAPH_TEMPERATURE);
                 break;
             case DISPLAY_GRAPH_TEMPERATURE:
             case DISPLAY_GRAPH_PRESSURE:
-                display_status = DISPLAY_LIVE; // exit graph view, don't go back to warmup timer
-
-                // Reset recording and timer for another Live->Brew cycle
-                log_index = 0;
-                brew_timer = 0;
+                goto_mode(DISPLAY_LIVE);
                 break;
             //case DISPLAY_WARMUP_TIMER:
             default:
@@ -175,6 +179,8 @@ void setup() {
     pinMode(PIN_BTN1, INPUT_PULLUP);
     button.begin(button_callback);
 
+    pinMode(PIN_BREW_SWITCH, INPUT_PULLUP); // externally pulled-up
+
     //heater_controller.set_target(80);
 }
 
@@ -192,7 +198,6 @@ void set_ssr(heater_action_t a) {
         set_rgb_led(0, 0, 0);
     } else {
         heater_pwm = true;
-        //set_rgb_led(0, 1, 0);
         // Driving of SSR occurs in TIMER1_OVF ISR
     }
 }
@@ -250,7 +255,7 @@ void get_buf_pressure(char *buf_pressure, double pressure_bar) {
     sprintf(buf_pressure, "%s bar", buf);
 }
 
-void get_buf_status(char *buf_status, heater_action_t heater_action, bool record_log) {
+void get_buf_status(char *buf_status, heater_action_t heater_action) {
     char buf[8];
     switch (heater_action) {
         case HEATER_ON:
@@ -266,13 +271,12 @@ void get_buf_status(char *buf_status, heater_action_t heater_action, bool record
             strcpy(buf, "OFF");
             break;
     }
-    if (display_status == DISPLAY_WARMUP_TIMER) { // simplified status
-        sprintf(buf_status, "%s", buf);
-    } else if (display_status == DISPLAY_BREWING) {
+    strcpy(buf_status, buf);
+    /*if (display_status == DISPLAY_BREWING) {
         sprintf(buf_status, "%s  %s", buf, record_log ? "Rec" : "");
     } else {
         strcpy(buf_status, buf);
-    }
+    }*/
 }
 
 void get_buf_timer(char *buf_timer, unsigned long m) {
@@ -281,7 +285,7 @@ void get_buf_timer(char *buf_timer, unsigned long m) {
         unsigned int m_sec = (unsigned int)((m / 1000) % 60);
         sprintf(buf_timer, "%02u:%02u", m_min, m_sec);
     } else { // Brew Status
-        sprintf(buf_timer, "%02u", m);
+        sprintf(buf_timer, "%02lu", m);
     }
 }
 
@@ -304,7 +308,34 @@ void loop() {
     // Record pressure (in bar * 10) every 0.5 s
     static uint16_t pressure_log[RECORD_LOG_SIZE];
 
+    static unsigned long brew_switch_check_counter = 0;
+    static bool brew_switch_activated = false;
+
+    // Handle buttons and switches
     SmartButton::service();
+
+    // Brew switch is a signal from an AC detection circuit (opto-isolated) so it
+    // alternates between LOW and HIGH at the AC frequency. If switch is off, signal
+    // is continuously HIGH.
+    // At 50Hz mains the period is 20 ms; at 60Hz it is 16.7ms.
+    // The main loop runs approx. every 1-2 ms so once the signal input is LOW it will stay
+    // there for at least 10 loops.
+    if (digitalRead(PIN_BREW_SWITCH) == LOW) { // any reading of LOW means switch is activated
+        brew_switch_activated = true; // keep track that BREWING mode was entered because of brew switch
+        brew_switch_check_counter = 0; // reset every time we see the switch LOW
+        goto_mode(DISPLAY_BREWING);
+    } else if (display_status == DISPLAY_BREWING && brew_switch_activated) { // only check for disabling the switch if currently brewing
+        // Need to verify for more than one AC cycle that signal stays high.
+        // Program loop frequency is about 1000Hz (1 ms per loop).
+        // Need to read for at least 1 full mains cycle = 40 ms.
+        // In 40 ms there are approx. 40 program loop cycles.
+        // Count up to 120 as long as switch input is HIGH and only
+        // deactivate brewing if it stayed HIGH the whole time.
+        if (brew_switch_check_counter++ > 120) {
+            brew_switch_check_counter = 0;
+            goto_mode(DISPLAY_GRAPH_TEMPERATURE);
+        }
+    }
 
     // Set SSR based on HeaterController, not direct from button inputs or measured temperature
     // TODO: Use HeaterController (PID)
@@ -315,9 +346,11 @@ void loop() {
         last_heater_action = heater_action;
     }
 
-    // Increment brew timer if in brewing mode
+    // Automatically move from Warmup to Live after 15 minutes
+    if (m > 900000) goto_mode(DISPLAY_LIVE);
 
     // Only update Serial and display once per second
+    // Extra work in here takes approx. 60 ms (measured with oscilloscope)
     if ((last_update_time + DISPLAY_UPDATE_INTERVAL) < m) {
         // Increment brew timer by one second if in brewing mode
         if (display_status == DISPLAY_BREWING && (last_brew_timer_update + 1000) < m) {
@@ -334,7 +367,7 @@ void loop() {
         // Populate display buffers (TODO: only run what's required for current display mode)
         get_buf_temperature(buf_temperature, temperature, display_status == DISPLAY_WARMUP_TIMER ? 0 : t_target);
         get_buf_pressure(buf_pressure, pressure_bar);
-        get_buf_status(buf_status, heater_action, record_log);
+        get_buf_status(buf_status, heater_action);
         get_buf_timer(buf_timer, display_status == DISPLAY_WARMUP_TIMER ? m : brew_timer);
 
         switch (display_status) {
@@ -356,7 +389,7 @@ void loop() {
         }
 
         // Record temperature and pressure to log
-        if (record_log) {
+        if (display_status == DISPLAY_BREWING) {
             // Filter out values outside of 10C to 150C range
             if (temperature < 150 && temperature > 10)
                 temperature_log[log_index] = (uint16_t)(temperature * 10.0);
@@ -366,11 +399,8 @@ void loop() {
                 pressure_log[log_index] = (uint16_t)(pressure_bar * 10.0);
 
             log_index++;
-            if (log_index >= RECORD_LOG_SIZE) {
-                record_log = false;
-                display_status = DISPLAY_GRAPH_TEMPERATURE;
-                heater_action = HEATER_OFF;
-                isr_heater_action = 0;
+            if (log_index >= RECORD_LOG_SIZE) { // 40 s
+                goto_mode(DISPLAY_GRAPH_TEMPERATURE);
             }
         }
 
