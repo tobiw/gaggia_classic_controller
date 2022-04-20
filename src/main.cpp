@@ -335,14 +335,10 @@ void loop() {
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
     // Record temperature (in C * 10) every 0.5 s
-    // Proposal: record 0.5C resolution with range from 70 to 120 => 50C range => 100 values
-    // Store as uint8_t. Decode: Treal = Tlog / 2 + 70
-    static uint16_t temperature_log[RECORD_LOG_SIZE];
+    static uint8_t temperature_log[RECORD_LOG_SIZE];
 
     // Record pressure (in bar * 10) every 0.5 s
-    // Proposal: record 0.5 bar resolution with range from 0 to 14 => 28 values
-    // Store as uint8_t. Decode: Preal = Plog / 2
-    static uint16_t pressure_log[RECORD_LOG_SIZE];
+    static uint8_t pressure_log[RECORD_LOG_SIZE];
 
     static uint8_t brew_switch_check_counter = 0;
     static bool brew_switch_activated = false;
@@ -398,14 +394,18 @@ void loop() {
         double pressure_bar = (pressure_V - 0.17) * 3.0; // subtract 1 bar pressure voltage and apply conversion factor
 
         // Record temperature and pressure to log
+        // Temperature: record 0.5C resolution with range from 70 to 120 => 50C range => 100 values
+        //   Store as uint8_t. Decode: Treal = Tlog / 2 + 70
+        // Pressure: record 0.5 bar resolution with range from 0 to 14 => 28 values
+        //   Store as uint8_t. Decode: Preal = Plog / 2
         if (display_status == DISPLAY_BREWING) {
             // Filter out values outside of 10C to 150C range
             if (temperature < 150 && temperature > 10)
-                temperature_log[log_index] = (uint16_t)(temperature * 10.0);
+                temperature_log[log_index] = (uint8_t)(round(temperature * 2.0)) - 70; // Subtract 70C to normalize temperature range
 
             // Filter out values outside of 0 to 15 bar range
             if (pressure_bar < 15 && pressure_bar > 0)
-                pressure_log[log_index] = (uint16_t)(pressure_bar * 10.0);
+                pressure_log[log_index] = (uint8_t)(round(pressure_bar * 2.0));
 
             log_index++;
             if (log_index >= RECORD_LOG_SIZE) { // 40 s

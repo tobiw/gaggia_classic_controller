@@ -89,7 +89,7 @@ void Display::draw_brew_status(char *buf_temperature, char *buf_pressure, char *
     } while(tft->nextPage());
 }
 
-void Display::draw_graph(const char *title, uint16_t *data, size_t datalen, uint16_t min, uint16_t max)
+void Display::draw_graph(const char *title, uint8_t *data, size_t datalen, uint8_t min, uint8_t max)
 {
     const uint8_t graph_x_size = 120;
     const uint8_t graph_y_size = 44;
@@ -102,7 +102,7 @@ void Display::draw_graph(const char *title, uint16_t *data, size_t datalen, uint
     const int data_range = max - min;
     const double y_factor = (double)graph_y_size / (double)data_range;
 
-    double max_value = data[0] / 10.0;
+    double max_value = data[0] / 2.0;
     char buf[8];
 
     // Small text
@@ -116,8 +116,8 @@ void Display::draw_graph(const char *title, uint16_t *data, size_t datalen, uint
         tft->drawLine(5, 10, 5, graph_bottom); // Y
 
         for (unsigned int i = 1; i < datalen; i++) {
-            const double d = data[i] / 10.0;
-            const double prev_d = data[i-1] / 10.0;
+            const double d = data[i] / 2.0;
+            const double prev_d = data[i-1] / 2.0;
 
             if (d > max_value) max_value = d;
 

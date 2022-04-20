@@ -27,7 +27,7 @@ class Display {
         void draw_warmup_timer(char *buf_temperature, char *buf_timer, char *buf_status);
         void draw_live_status(char *buf_temperature, char *buf_pressure, char *buf_status);
         void draw_brew_status(char *buf_temperature, char *buf_pressure, char *buf_status, char *buf_timer);
-        void draw_graph(const char *title, uint16_t *data, size_t datale, uint16_t min, uint16_t max);
+        void draw_graph(const char *title, uint8_t *data, size_t datale, uint8_t min, uint8_t max);
 
     private:
         U8G2_SSD1306_128X64_NONAME_F_HW_I2C *tft;
