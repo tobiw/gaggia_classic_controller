@@ -6,6 +6,9 @@
 //#include "heater_controller.h"
 #include "display.h"
 
+/*
+ * Pin definitions for inputs and outputs
+ */
 #define PIN_SDA 2
 #define PIN_SCL 3
 #define PIN_BTN1 4
@@ -16,9 +19,19 @@
 #define PIN_LED_G 20
 #define PIN_LED_B 21
 
-#define DISPLAY_UPDATE_INTERVAL 500
-#define RECORD_LOG_SIZE 80
+/*
+ * Global constants definitions
+ */
+#define DISPLAY_UPDATE_INTERVAL 500 // used in the main loop to only update the display periodically
+#define RECORD_LOG_SIZE 80 // fixed size for the temperature and pressure logs
 
+/*
+ * The program's main modes. These are executed fairly sequentially in a typical brew workflow:
+ * Powering up the machine enters the Warmup mode for 15 minutes before moving to the Live status/idle
+ * screen (PID maintains set temperature). When the brew switch is activated the program moves to the
+ * brewing mode which displays a shot timer and records temperature and pressure data. When the brew is
+ * done the temperature and pressure graphs are displayed.
+ */
 enum display_status_t {
     DISPLAY_WARMUP_TIMER = 0,
     DISPLAY_LIVE,
@@ -32,14 +45,16 @@ enum heater_action_t {
     HEATER_ON,
     HEATER_25PCT,
     HEATER_7PCT
-}; // just what the user input is telling the device, not the actual SSR output
+};
 
-// Globals
-display_status_t display_status = DISPLAY_WARMUP_TIMER;
-heater_action_t heater_action = HEATER_ON;
-volatile uint8_t isr_heater_action = 1;
-unsigned int log_index = 0;
-unsigned long brew_timer = 0;
+/*
+ * Global variables
+ */
+display_status_t display_status = DISPLAY_WARMUP_TIMER; // current program mode
+heater_action_t heater_action = HEATER_ON; // current heater setting (TODO: replace with PID controller)
+volatile uint8_t isr_heater_action = 1; // heater setting for timer OVF ISR
+unsigned int log_index = 0; // current log index when in Brewing mode
+unsigned long brew_timer = 0; // current time in seconds since entering Brewing mode
 
 //HeaterController heater_controller;
 
@@ -47,21 +62,23 @@ Display display;
 
 //MAX6675 thermocouple(15, 10, 14); // SCK, CS, MISO
 
+// Debounces button with click, double-click and long-press functionality
 using namespace smartbutton;
 SmartButton button(PIN_BTN1, SmartButton::InputType::NORMAL_HIGH);
-bool button_pressed = false;
-bool button_long_pressed = false;
 
+/*
+ * Set RGB LED output
+ * red: heating
+ * green: Ready for brewing
+ * blue: inactive/cooling down
+ */
 void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
-    if (r + g + b <= 1) {
-        digitalWrite(PIN_LED_R, r == 1 ? LOW : HIGH);
-        digitalWrite(PIN_LED_G, g == 1 ? LOW : HIGH);
-        digitalWrite(PIN_LED_B, b == 1 ? LOW : HIGH);
-    } else { // flash to mix multiple colours
-        // TODO: non-blocking
-    }
+    digitalWrite(PIN_LED_R, r == 1 ? LOW : HIGH);
+    digitalWrite(PIN_LED_G, g == 1 ? LOW : HIGH);
+    digitalWrite(PIN_LED_B, b == 1 ? LOW : HIGH);
 }
 
+// TODO: remove when using PID controller
 void goto_next_heater_action() {
     switch (heater_action) {
         case HEATER_OFF:
@@ -83,6 +100,9 @@ void goto_next_heater_action() {
     }
 }
 
+/*
+ * Set new program mode and adjust global variables accordingly
+ */
 void goto_mode(display_status_t new_status) {
     display_status = new_status;
     switch (display_status) {
@@ -101,17 +121,24 @@ void goto_mode(display_status_t new_status) {
             heater_action = HEATER_OFF;
             isr_heater_action = 0;
             break;
+        default:
+            Serial.print("ERROR: Invalid new_status ");
+            Serial.print((int)new_status);
+            Serial.println(" passed to goto_mode");
+            break;
     }
 }
 
+/*
+ * Handle button actions:
+ * click: set new heater (TODO: remove when using PID controller), and toggle between temperature and pressure graphs
+ * long-press: go to next mode
+ */
 void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
     if (event == SmartButton::Event::CLICK) {
         if (clicks == 1) {
             switch (display_status) {
-                /*case DISPLAY_WARMUP_TIMER: // click on warmup screen advances to Live Status page
-                    display_status = DISPLAY_LIVE;
-                    break;*/
-                case DISPLAY_WARMUP_TIMER: // TODO: remove once PID is active
+                case DISPLAY_WARMUP_TIMER: // TODO: advance to next mode once PID is active
                 case DISPLAY_LIVE: // only switch heater action on Live Status or Brewing pages
                 case DISPLAY_BREWING:
                     goto_next_heater_action();
@@ -147,9 +174,11 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
 }
 
 void setup() {
+    // Serial output and display
     Serial.begin(115200);
     display.init();
 
+    // Configure timer 1, to be used for driving heater SSR
     noInterrupts();
     TCCR1A = 0;
     TCNT1 = 57723; // default 0.5 s interval
@@ -171,38 +200,33 @@ void setup() {
     set_rgb_led(0, 0, 0);
     delay(LED_TEST_DELAY);
 
+    // Sensors, inputs, and SSR output
     pinMode(PIN_ADC_PRESSURE, INPUT);
-
     pinMode(PIN_SSR, OUTPUT);
     digitalWrite(PIN_SSR, LOW);
-
     pinMode(PIN_BTN1, INPUT_PULLUP);
     button.begin(button_callback);
-
     pinMode(PIN_BREW_SWITCH, INPUT_PULLUP); // externally pulled-up
-
-    //heater_controller.set_target(80);
 }
-
-volatile bool heater_pwm = false;
-volatile bool current_ssr_output = false;
 
 void set_ssr(heater_action_t a) {
     if (a == HEATER_ON) {
-        heater_pwm = false;
         digitalWrite(PIN_SSR, HIGH);
-        set_rgb_led(1, 0, 0);
+        set_rgb_led(1, 0, 0); // TODO: remove once heating is done by PID
     } else if (a == HEATER_OFF) {
-        heater_pwm = false;
         digitalWrite(PIN_SSR, LOW);
-        set_rgb_led(0, 0, 0);
+        set_rgb_led(0, 0, 0); // TODO: remove once heating is done by PID
     } else {
-        heater_pwm = true;
         // Driving of SSR occurs in TIMER1_OVF ISR
     }
 }
 
+volatile bool current_ssr_output = false;
+
 /*
+ * Timer 1 overflow interrupt service routine
+ * Switches timer value (TCNT1) according to current on-duty and off-duty cycles for the heater.
+ *
  * Python program to calculate TCNT value:
  * def calc(p):
  *   timer_clock = cpu/prescale
@@ -210,7 +234,7 @@ void set_ssr(heater_action_t a) {
  */
 ISR(TIMER1_OVF_vect)
 {
-    if (heater_pwm) {
+    if (isr_heater_action > 1) { // > 1 means PWM
         current_ssr_output = !current_ssr_output;
         digitalWrite(PIN_SSR, current_ssr_output ? HIGH : LOW);
         digitalWrite(PIN_LED_R, current_ssr_output ? LOW : HIGH);
@@ -239,46 +263,52 @@ ISR(TIMER1_OVF_vect)
     }
 }
 
-void get_buf_temperature(char *buf_temperature, double temperature, unsigned int t_target) {
+/*
+ * Fill string buffer with temperature information for warmup, live status and brewing screens
+ */
+void get_buf_temperature(char *buf_temperature, double temperature) {
     char buf[8];
     dtostrf(temperature, 3, 1, buf);
-    if (t_target == 0) {
-        sprintf(buf_temperature, "%sC", buf);
-    } else {
-        sprintf(buf_temperature, "%sC (%uC)", buf, t_target);
-    }
+    sprintf(buf_temperature, "%sC", buf);
 }
 
+/*
+ * Fill string buffer with pressure information for live status and brewing screens
+ */
 void get_buf_pressure(char *buf_pressure, double pressure_bar) {
     char buf[8];
     dtostrf(pressure_bar, 2, 1, buf);
     sprintf(buf_pressure, "%s bar", buf);
 }
 
+/*
+ * Fill string buffer with information for warmup, live status and brewing screens
+ */
 void get_buf_status(char *buf_status, heater_action_t heater_action) {
-    char buf[8];
+    const static char str_on[] PROGMEM = " ON";
+    const static char str_25pct[] PROGMEM = "25%";
+    const static char str_7pct[] PROGMEM = " 7%";
+    const static char str_off[] PROGMEM = "OFF";
+
     switch (heater_action) {
         case HEATER_ON:
-            strcpy(buf, " ON");
+            strcpy(buf_status, str_on);
             break;
         case HEATER_25PCT:
-            strcpy(buf, "25%");
+            strcpy(buf_status, str_25pct);
             break;
         case HEATER_7PCT:
-            strcpy(buf, " 7%");
+            strcpy(buf_status, str_7pct);
             break;
         default:
-            strcpy(buf, "OFF");
+            strcpy(buf_status, str_off);
             break;
     }
-    strcpy(buf_status, buf);
-    /*if (display_status == DISPLAY_BREWING) {
-        sprintf(buf_status, "%s  %s", buf, record_log ? "Rec" : "");
-    } else {
-        strcpy(buf_status, buf);
-    }*/
 }
 
+/*
+ * Fill string buffer with information for warmup and brewing screens
+ */
 void get_buf_timer(char *buf_timer, unsigned long m) {
     if (display_status == DISPLAY_WARMUP_TIMER) {
         unsigned int m_min = (unsigned int)((m / 1000) / 60);
@@ -289,11 +319,13 @@ void get_buf_timer(char *buf_timer, unsigned long m) {
     }
 }
 
+/*
+ * The program's main loop
+ */
 void loop() {
-    static char buf_temperature[16], buf_pressure[10], buf_status[16], buf_timer[8];
+    static char buf_temperature[16], buf_pressure[10], buf_status[8], buf_timer[8];
 
     static heater_action_t last_heater_action = HEATER_OFF;
-    const unsigned int t_target = 80;
 
     static unsigned long last_update_time = 0;
     static unsigned long last_brew_timer_update = 0;
@@ -303,12 +335,16 @@ void loop() {
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
     // Record temperature (in C * 10) every 0.5 s
+    // Proposal: record 0.5C resolution with range from 70 to 120 => 50C range => 100 values
+    // Store as uint8_t. Decode: Treal = Tlog / 2 + 70
     static uint16_t temperature_log[RECORD_LOG_SIZE];
 
     // Record pressure (in bar * 10) every 0.5 s
+    // Proposal: record 0.5 bar resolution with range from 0 to 14 => 28 values
+    // Store as uint8_t. Decode: Preal = Plog / 2
     static uint16_t pressure_log[RECORD_LOG_SIZE];
 
-    static unsigned long brew_switch_check_counter = 0;
+    static uint8_t brew_switch_check_counter = 0;
     static bool brew_switch_activated = false;
 
     // Handle buttons and switches
@@ -318,8 +354,6 @@ void loop() {
     // alternates between LOW and HIGH at the AC frequency. If switch is off, signal
     // is continuously HIGH.
     // At 50Hz mains the period is 20 ms; at 60Hz it is 16.7ms.
-    // The main loop runs approx. every 1-2 ms so once the signal input is LOW it will stay
-    // there for at least 10 loops.
     if (digitalRead(PIN_BREW_SWITCH) == LOW) { // any reading of LOW means switch is activated
         brew_switch_activated = true; // keep track that BREWING mode was entered because of brew switch
         brew_switch_check_counter = 0; // reset every time we see the switch LOW
@@ -328,9 +362,8 @@ void loop() {
         // Need to verify for more than one AC cycle that signal stays high.
         // Program loop frequency is about 1000Hz (1 ms per loop).
         // Need to read for at least 1 full mains cycle = 40 ms.
-        // In 40 ms there are approx. 40 program loop cycles.
-        // Count up to 120 as long as switch input is HIGH and only
-        // deactivate brewing if it stayed HIGH the whole time.
+        // In 40 ms there are approx. 40 program loop cycles unless the code updating the display below is running.
+        // Count up to 120 as long as switch input is HIGH and only deactivate brewing if it stayed HIGH the whole time.
         if (brew_switch_check_counter++ > 120) {
             brew_switch_check_counter = 0;
             brew_switch_activated = false;
@@ -341,7 +374,6 @@ void loop() {
     // Set SSR based on HeaterController, not direct from button inputs or measured temperature
     // TODO: Use HeaterController (PID)
     //heater_controller.update(temperature);
-    //if (heater_action == HEATER_ON && heater_controller.get_output() == 1) set_ssr(HEATER_ON);
     if (heater_action != last_heater_action) {
         set_ssr(heater_action);
         last_heater_action = heater_action;
@@ -350,8 +382,8 @@ void loop() {
     // Automatically move from Warmup to Live after 15 minutes
     if (m > 900000) goto_mode(DISPLAY_LIVE);
 
-    // Only update Serial and display once per second
-    // Extra work in here takes approx. 60 ms (measured with oscilloscope)
+    // Only update Serial and display every 0.5 s
+    // The extra work in here takes approx. 60 ms (measured with oscilloscope)
     if ((last_update_time + DISPLAY_UPDATE_INTERVAL) < m) {
         // Increment brew timer by one second if in brewing mode
         if (display_status == DISPLAY_BREWING && (last_brew_timer_update + 1000) < m) {
@@ -364,30 +396,6 @@ void loop() {
         // voltage range of sensor is 0.5-4.5V = 4V
         double pressure_V = pressure_raw * (5.0 / 1024.0); // factor is (maxV / maxDigitalValue)
         double pressure_bar = (pressure_V - 0.17) * 3.0; // subtract 1 bar pressure voltage and apply conversion factor
-
-        // Populate display buffers (TODO: only run what's required for current display mode)
-        get_buf_temperature(buf_temperature, temperature, display_status == DISPLAY_WARMUP_TIMER ? 0 : t_target);
-        get_buf_pressure(buf_pressure, pressure_bar);
-        get_buf_status(buf_status, heater_action);
-        get_buf_timer(buf_timer, display_status == DISPLAY_WARMUP_TIMER ? m : brew_timer);
-
-        switch (display_status) {
-            case DISPLAY_WARMUP_TIMER:
-                display.draw_warmup_timer(buf_temperature, buf_timer, buf_status);
-                break;
-            case DISPLAY_LIVE:
-                display.draw_live_status(buf_temperature, buf_pressure, buf_status);
-                break;
-            case DISPLAY_BREWING:
-                display.draw_brew_status(buf_temperature, buf_pressure, buf_status, buf_timer);
-                break;
-            case DISPLAY_GRAPH_TEMPERATURE:
-                display.draw_graph("Temp", temperature_log, log_index, 10, 120);
-                break;
-            case DISPLAY_GRAPH_PRESSURE:
-                display.draw_graph("Pres", pressure_log, log_index, 0, 14);
-                break;
-        }
 
         // Record temperature and pressure to log
         if (display_status == DISPLAY_BREWING) {
@@ -403,6 +411,35 @@ void loop() {
             if (log_index >= RECORD_LOG_SIZE) { // 40 s
                 goto_mode(DISPLAY_GRAPH_TEMPERATURE);
             }
+        }
+
+        // Populate string buffers and sent to display for drawing
+        switch (display_status) {
+            case DISPLAY_WARMUP_TIMER:
+                get_buf_temperature(buf_temperature, temperature);
+                get_buf_status(buf_status, heater_action);
+                get_buf_timer(buf_timer, m);
+                display.draw_warmup_timer(buf_temperature, buf_timer, buf_status);
+                break;
+            case DISPLAY_LIVE:
+                get_buf_temperature(buf_temperature, temperature);
+                get_buf_pressure(buf_pressure, pressure_bar);
+                get_buf_status(buf_status, heater_action);
+                display.draw_live_status(buf_temperature, buf_pressure, buf_status);
+                break;
+            case DISPLAY_BREWING:
+                get_buf_temperature(buf_temperature, temperature);
+                get_buf_pressure(buf_pressure, pressure_bar);
+                get_buf_status(buf_status, heater_action);
+                get_buf_timer(buf_timer, brew_timer);
+                display.draw_brew_status(buf_temperature, buf_pressure, buf_status, buf_timer);
+                break;
+            case DISPLAY_GRAPH_TEMPERATURE:
+                display.draw_graph("Temp", temperature_log, log_index, 70, 120);
+                break;
+            case DISPLAY_GRAPH_PRESSURE:
+                display.draw_graph("Pres", pressure_log, log_index, 0, 14);
+                break;
         }
 
         last_update_time = m;
