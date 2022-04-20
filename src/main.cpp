@@ -333,6 +333,7 @@ void loop() {
         // deactivate brewing if it stayed HIGH the whole time.
         if (brew_switch_check_counter++ > 120) {
             brew_switch_check_counter = 0;
+            brew_switch_activated = false;
             goto_mode(DISPLAY_GRAPH_TEMPERATURE);
         }
     }
