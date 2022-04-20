@@ -9,7 +9,7 @@
 #define PIN_SDA 2
 #define PIN_SCL 3
 #define PIN_BTN1 4
-#define PIN_BREW_SWITCH 7
+#define PIN_BREW_SWITCH 8
 #define PIN_SSR 5
 #define PIN_ADC_PRESSURE A0
 #define PIN_LED_R 19
