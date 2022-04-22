@@ -44,7 +44,7 @@ enum heater_action_t {
     HEATER_OFF = 0,
     HEATER_ON,
     HEATER_25PCT,
-    HEATER_7PCT
+    HEATER_4PCT
 };
 
 /*
@@ -90,10 +90,10 @@ void goto_next_heater_action() {
             isr_heater_action = 2;
             break;
         case HEATER_25PCT:
-            heater_action = HEATER_7PCT;
+            heater_action = HEATER_4PCT;
             isr_heater_action = 3;
             break;
-        case HEATER_7PCT:
+        case HEATER_4PCT:
             heater_action = HEATER_OFF;
             isr_heater_action = 0;
             break;
@@ -107,7 +107,7 @@ void goto_mode(display_status_t new_status) {
     display_status = new_status;
     switch (display_status) {
         case DISPLAY_LIVE:
-            heater_action = HEATER_7PCT;
+            heater_action = HEATER_4PCT;
             isr_heater_action = 3;
             // Prepare logging and timer for brewing
             log_index = 0;
@@ -249,11 +249,11 @@ ISR(TIMER1_OVF_vect)
             } else { // off cycle
                 TCNT1 = 53816;
             }
-        } else if (isr_heater_action == 3) { // 7%
+        } else if (isr_heater_action == 3) { // 4%
             if (current_ssr_output) { // on cycle
-                TCNT1 = 64441;
+                TCNT1 = 64910;
             } else { // off cycle
-                TCNT1 = 51004;
+                TCNT1 = 50535;
             }
         } else {
             TCNT1 = 57723;
@@ -287,21 +287,21 @@ void get_buf_pressure(char *buf_pressure, double pressure_bar) {
 void get_buf_status(char *buf_status, heater_action_t heater_action) {
     const static char str_on[] PROGMEM = " ON";
     const static char str_25pct[] PROGMEM = "25%";
-    const static char str_7pct[] PROGMEM = " 7%";
+    const static char str_4pct[] PROGMEM = " 4%";
     const static char str_off[] PROGMEM = "OFF";
 
     switch (heater_action) {
         case HEATER_ON:
-            strcpy(buf_status, str_on);
+            sprintf(buf_status, "%s %lu", str_on, millis());
             break;
         case HEATER_25PCT:
-            strcpy(buf_status, str_25pct);
+            sprintf(buf_status, "%s %lu", str_25pct, millis());
             break;
-        case HEATER_7PCT:
-            strcpy(buf_status, str_7pct);
+        case HEATER_4PCT:
+            sprintf(buf_status, "%s %lu", str_4pct, millis());
             break;
         default:
-            strcpy(buf_status, str_off);
+            sprintf(buf_status, "%s %lu", str_off, millis());
             break;
     }
 }
@@ -380,9 +380,9 @@ void loop() {
 
     // Only update Serial and display every 0.5 s
     // The extra work in here takes approx. 60 ms (measured with oscilloscope)
-    if ((last_update_time + DISPLAY_UPDATE_INTERVAL) < m) {
+    if ((unsigned long)(m - last_update_time) > DISPLAY_UPDATE_INTERVAL) {
         // Increment brew timer by one second if in brewing mode
-        if (display_status == DISPLAY_BREWING && (last_brew_timer_update + 1000) < m) {
+        if (display_status == DISPLAY_BREWING && ((m - last_brew_timer_update) > 1000)) {
             last_brew_timer_update = m;
             brew_timer++;
         }
