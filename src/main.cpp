@@ -23,7 +23,9 @@
  * Global constants definitions
  */
 #define DISPLAY_UPDATE_INTERVAL 500 // used in the main loop to only update the display periodically
-#define RECORD_LOG_SIZE 80 // fixed size for the temperature and pressure logs
+#define RECORD_LOG_SIZE 100 // fixed size for the temperature and pressure logs
+#define AUTO_ADVANCE_TIME_WARMUP_TO_LIVE 900000 // move from Warmup to Live Status after 15 minutes
+#define AUTO_ADVANCE_TIME_LIVE_TO_BREWING 5000 // move from Live Status to Brewing after 5 seconds (if brew switch activated)
 
 /*
  * The program's main modes. These are executed fairly sequentially in a typical brew workflow:
@@ -285,23 +287,23 @@ void get_buf_pressure(char *buf_pressure, double pressure_bar) {
  * Fill string buffer with information for warmup, live status and brewing screens
  */
 void get_buf_status(char *buf_status, heater_action_t heater_action) {
-    const static char str_on[] PROGMEM = " ON";
-    const static char str_25pct[] PROGMEM = "25%";
-    const static char str_4pct[] PROGMEM = " 4%";
-    const static char str_off[] PROGMEM = "OFF";
+    const static char str_on[] = " ON";
+    const static char str_25pct[] = "25%";
+    const static char str_4pct[] = " 4%";
+    const static char str_off[] = "OFF";
 
     switch (heater_action) {
         case HEATER_ON:
-            sprintf(buf_status, "%s %lu", str_on, millis());
+            strcpy(buf_status, str_on);
             break;
         case HEATER_25PCT:
-            sprintf(buf_status, "%s %lu", str_25pct, millis());
+            strcpy(buf_status, str_25pct);
             break;
         case HEATER_4PCT:
-            sprintf(buf_status, "%s %lu", str_4pct, millis());
+            strcpy(buf_status, str_4pct);
             break;
         default:
-            sprintf(buf_status, "%s %lu", str_off, millis());
+            strcpy(buf_status, str_off);
             break;
     }
 }
@@ -342,6 +344,7 @@ void loop() {
 
     static uint8_t brew_switch_check_counter = 0;
     static bool brew_switch_activated = false;
+    static unsigned long brew_switch_activated_time = 0;
 
     // Handle buttons and switches
     SmartButton::service();
@@ -351,10 +354,10 @@ void loop() {
     // is continuously HIGH.
     // At 50Hz mains the period is 20 ms; at 60Hz it is 16.7ms.
     if (digitalRead(PIN_BREW_SWITCH) == LOW) { // any reading of LOW means switch is activated
+        brew_switch_activated_time = m; // keep track of time and only go to BREWING mode after 5 seconds (ignore flushing or pre-infusion)
         brew_switch_activated = true; // keep track that BREWING mode was entered because of brew switch
         brew_switch_check_counter = 0; // reset every time we see the switch LOW
-        goto_mode(DISPLAY_BREWING);
-    } else if (display_status == DISPLAY_BREWING && brew_switch_activated) { // only check for disabling the switch if currently brewing
+    } else if (brew_switch_activated) {
         // Need to verify for more than one AC cycle that signal stays high.
         // Program loop frequency is about 1000Hz (1 ms per loop).
         // Need to read for at least 1 full mains cycle = 40 ms.
@@ -363,7 +366,8 @@ void loop() {
         if (brew_switch_check_counter++ > 120) {
             brew_switch_check_counter = 0;
             brew_switch_activated = false;
-            goto_mode(DISPLAY_GRAPH_TEMPERATURE);
+
+            if (display_status == DISPLAY_BREWING) goto_mode(DISPLAY_GRAPH_TEMPERATURE);
         }
     }
 
@@ -376,7 +380,10 @@ void loop() {
     }
 
     // Automatically move from Warmup to Live after 15 minutes
-    if (m > 900000) goto_mode(DISPLAY_LIVE);
+    if (display_status == DISPLAY_WARMUP_TIMER && m > AUTO_ADVANCE_TIME_WARMUP_TO_LIVE) goto_mode(DISPLAY_LIVE);
+
+    // Move to Brewing mode 5 seconds after brewing switch got activated
+    if (display_status != DISPLAY_BREWING && brew_switch_activated && (m - brew_switch_activated_time) > AUTO_ADVANCE_TIME_LIVE_TO_BREWING) goto_mode(DISPLAY_BREWING);
 
     // Only update Serial and display every 0.5 s
     // The extra work in here takes approx. 60 ms (measured with oscilloscope)
@@ -408,7 +415,7 @@ void loop() {
                 pressure_log[log_index] = (uint8_t)(round(pressure_bar * 2.0));
 
             log_index++;
-            if (log_index >= RECORD_LOG_SIZE) { // 40 s
+            if (log_index >= RECORD_LOG_SIZE) { // 50 s
                 goto_mode(DISPLAY_GRAPH_TEMPERATURE);
             }
         }
