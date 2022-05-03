@@ -80,24 +80,38 @@ void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
     digitalWrite(PIN_LED_B, b == 1 ? LOW : HIGH);
 }
 
+void set_heater_action(heater_action_t h) {
+    heater_action = h;
+    switch (heater_action) {
+        case HEATER_OFF:
+            isr_heater_action = 0;
+            break;
+        case HEATER_ON:
+            isr_heater_action = 1;
+            break;
+        case HEATER_25PCT:
+            isr_heater_action = 2;
+            break;
+        case HEATER_4PCT:
+            isr_heater_action = 3;
+            break;
+    }
+}
+
 // TODO: remove when using PID controller
 void goto_next_heater_action() {
     switch (heater_action) {
         case HEATER_OFF:
-            heater_action = HEATER_ON;
-            isr_heater_action = 1;
+            set_heater_action(HEATER_ON);
             break;
         case HEATER_ON:
-            heater_action = HEATER_25PCT;
-            isr_heater_action = 2;
+            set_heater_action(HEATER_25PCT);
             break;
         case HEATER_25PCT:
-            heater_action = HEATER_4PCT;
-            isr_heater_action = 3;
+            set_heater_action(HEATER_4PCT);
             break;
         case HEATER_4PCT:
-            heater_action = HEATER_OFF;
-            isr_heater_action = 0;
+            set_heater_action(HEATER_OFF);
             break;
     }
 }
@@ -109,19 +123,16 @@ void goto_mode(display_status_t new_status) {
     display_status = new_status;
     switch (display_status) {
         case DISPLAY_LIVE:
-            heater_action = HEATER_4PCT;
-            isr_heater_action = 3;
+            set_heater_action(HEATER_4PCT);
             // Prepare logging and timer for brewing
             log_index = 0;
             brew_timer = 0;
             break;
         case DISPLAY_BREWING:
-            heater_action = HEATER_25PCT;
-            isr_heater_action = 2;
+            set_heater_action(HEATER_25PCT);
             break;
         case DISPLAY_GRAPH_TEMPERATURE:
-            heater_action = HEATER_OFF;
-            isr_heater_action = 0;
+            set_heater_action(HEATER_OFF);
             break;
         default:
             Serial.print("ERROR: Invalid new_status ");
@@ -379,8 +390,13 @@ void loop() {
         last_heater_action = heater_action;
     }
 
-    // Automatically move from Warmup to Live after 15 minutes
-    if (display_status == DISPLAY_WARMUP_TIMER && m > AUTO_ADVANCE_TIME_WARMUP_TO_LIVE) goto_mode(DISPLAY_LIVE);
+    if (display_status == DISPLAY_WARMUP_TIMER) {
+        // Automatically reduce heating after 1 minute
+        if (m > 60000 && m < 61000) set_heater_action(HEATER_4PCT);
+
+        // Automatically move from Warmup to Live after 15 minutes
+        if (m > AUTO_ADVANCE_TIME_WARMUP_TO_LIVE) goto_mode(DISPLAY_LIVE);
+    }
 
     // Move to Brewing mode 5 seconds after brewing switch got activated
     if (display_status != DISPLAY_BREWING && brew_switch_activated && (m - brew_switch_activated_time) > AUTO_ADVANCE_TIME_LIVE_TO_BREWING) goto_mode(DISPLAY_BREWING);
