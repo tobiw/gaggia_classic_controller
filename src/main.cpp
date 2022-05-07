@@ -353,7 +353,7 @@ void loop() {
     // Record pressure (in bar * 10) every 0.5 s
     static uint8_t pressure_log[RECORD_LOG_SIZE];
 
-    static uint8_t brew_switch_check_counter = 0;
+    static uint16_t brew_switch_check_counter = 0;
     static bool brew_switch_activated = false;
     static unsigned long brew_switch_activated_time = 0;
 
@@ -365,16 +365,19 @@ void loop() {
     // is continuously HIGH.
     // At 50Hz mains the period is 20 ms; at 60Hz it is 16.7ms.
     if (digitalRead(PIN_BREW_SWITCH) == LOW) { // any reading of LOW means switch is activated
-        brew_switch_activated_time = m; // keep track of time and only go to BREWING mode after 5 seconds (ignore flushing or pre-infusion)
-        brew_switch_activated = true; // keep track that BREWING mode was entered because of brew switch
+        if (!brew_switch_activated) {
+            brew_switch_activated = true; // keep track that BREWING mode was entered because of brew switch
+            brew_switch_activated_time = m; // keep track of time and only go to BREWING mode after 5 seconds (ignore flushing or pre-infusion)
+        }
         brew_switch_check_counter = 0; // reset every time we see the switch LOW
     } else if (brew_switch_activated) {
         // Need to verify for more than one AC cycle that signal stays high.
         // Program loop frequency is about 1000Hz (1 ms per loop).
         // Need to read for at least 1 full mains cycle = 40 ms.
         // In 40 ms there are approx. 40 program loop cycles unless the code updating the display below is running.
-        // Count up to 120 as long as switch input is HIGH and only deactivate brewing if it stayed HIGH the whole time.
-        if (brew_switch_check_counter++ > 120) {
+        // Count up to 300 as long as switch input is HIGH and only deactivate brewing if it stayed HIGH the whole time.
+        // (1000 to give a short delay when pump is stopped)
+        if (brew_switch_check_counter++ > 1000) {
             brew_switch_check_counter = 0;
             brew_switch_activated = false;
 
@@ -399,7 +402,9 @@ void loop() {
     }
 
     // Move to Brewing mode 5 seconds after brewing switch got activated
-    if (display_status != DISPLAY_BREWING && brew_switch_activated && (m - brew_switch_activated_time) > AUTO_ADVANCE_TIME_LIVE_TO_BREWING) goto_mode(DISPLAY_BREWING);
+    if (display_status == DISPLAY_WARMUP_TIMER || display_status == DISPLAY_LIVE) {
+        if (brew_switch_activated && (m - brew_switch_activated_time) > AUTO_ADVANCE_TIME_LIVE_TO_BREWING) goto_mode(DISPLAY_BREWING);
+    }
 
     // Only update Serial and display every 0.5 s
     // The extra work in here takes approx. 60 ms (measured with oscilloscope)
