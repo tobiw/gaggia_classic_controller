@@ -1,6 +1,10 @@
 #include <Arduino.h>
 
-//#include "max6675.h"
+#include <Wire.h>
+#include <SPI.h>
+#include "Adafruit_MAX31855.h"
+
+
 #include "SmartButton.h"
 
 //#include "heater_controller.h"
@@ -18,6 +22,9 @@
 #define PIN_LED_R 19
 #define PIN_LED_G 20
 #define PIN_LED_B 21
+#define PIN_SPI_CS 10
+#define PIN_SPI_SCLK 15
+#define PIN_SPI_MISO 14
 
 /*
  * Global constants definitions
@@ -62,7 +69,7 @@ unsigned long brew_timer = 0; // current time in seconds since entering Brewing 
 
 Display display;
 
-//MAX6675 thermocouple(15, 10, 14); // SCK, CS, MISO
+Adafruit_MAX31855 thermocouple(PIN_SPI_SCLK, PIN_SPI_CS, PIN_SPI_MISO);
 
 // Debounces button with click, double-click and long-press functionality
 using namespace smartbutton;
@@ -220,6 +227,13 @@ void setup() {
     pinMode(PIN_BTN1, INPUT_PULLUP);
     button.begin(button_callback);
     pinMode(PIN_BREW_SWITCH, INPUT_PULLUP); // externally pulled-up
+
+    if (!thermocouple.begin()) {
+        Serial.println("ERROR thermocouple");
+        while (1) {};
+    }
+    Serial.print("Get first thermocouple reading: ");
+    Serial.println(thermocouple.readCelsius());
 }
 
 void set_ssr(heater_action_t a) {
@@ -344,7 +358,7 @@ void loop() {
     static unsigned long last_brew_timer_update = 0;
     const unsigned long m = millis();
 
-    const double temperature = 20;//thermocouple.readCelsius();
+    static double temperature = thermocouple.readCelsius();
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
     // Record temperature (in C * 10) every 0.5 s
@@ -414,6 +428,10 @@ void loop() {
             last_brew_timer_update = m;
             brew_timer++;
         }
+
+        // Get temperature
+        temperature = thermocouple.readCelsius();
+        Serial.println(temperature);
 
         // Pressure conversion
         // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar
