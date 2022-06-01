@@ -408,8 +408,8 @@ void loop() {
     }
 
     if (display_status == DISPLAY_WARMUP_TIMER) {
-        // Automatically reduce heating after 1 minute
-        if (m > 60000 && m < 61000) set_heater_action(HEATER_4PCT);
+        // Automatically reduce heating after 5 minutes or when temperature is above 90C
+        if ((m > 300000 && m < 301000) || temperature >= 90.0) set_heater_action(HEATER_4PCT);
 
         // Automatically move from Warmup to Live after 15 minutes
         if (m > AUTO_ADVANCE_TIME_WARMUP_TO_LIVE) goto_mode(DISPLAY_LIVE);
