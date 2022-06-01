@@ -408,9 +408,6 @@ void loop() {
     }
 
     if (display_status == DISPLAY_WARMUP_TIMER) {
-        // Automatically reduce heating after 5 minutes or when temperature is above 90C
-        if ((m > 300000 && m < 301000) || temperature >= 90.0) set_heater_action(HEATER_4PCT);
-
         // Automatically move from Warmup to Live after 15 minutes
         if (m > AUTO_ADVANCE_TIME_WARMUP_TO_LIVE) goto_mode(DISPLAY_LIVE);
     }
@@ -432,6 +429,14 @@ void loop() {
         // Get temperature
         temperature = thermocouple.readCelsius();
         Serial.println(temperature);
+
+        // PID here?
+        // Basic temperature control
+        if ((heater_action == HEATER_25PCT || heater_action == HEATER_ON) && temperature >= 98.0) {
+            set_heater_action(HEATER_4PCT);
+        } else if (heater_action == HEATER_4PCT && temperature < 90.0) {
+            set_heater_action(HEATER_25PCT);
+        }
 
         // Pressure conversion
         // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar
