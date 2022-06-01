@@ -359,6 +359,7 @@ void loop() {
     const unsigned long m = millis();
 
     static double temperature = thermocouple.readCelsius();
+    static double last_temperature = 0;
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
     // Record temperature (in C * 10) every 0.5 s
@@ -428,6 +429,14 @@ void loop() {
 
         // Get temperature
         temperature = thermocouple.readCelsius();
+        if (isnan(temperature)) {
+            delay(1);
+            temperature = thermocouple.readCelsius();
+            if (isnan(temperature)) {
+                temperature = last_temperature; // fall back to reusing last temperature reading
+            }
+        }
+        last_temperature = temperature;
         Serial.println(temperature);
 
         // PID here?
