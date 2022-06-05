@@ -139,6 +139,7 @@ void goto_mode(display_status_t new_status) {
             set_heater_action(HEATER_25PCT);
             break;
         case DISPLAY_GRAPH_TEMPERATURE:
+        case DISPLAY_GRAPH_PRESSURE:
             set_heater_action(HEATER_OFF);
             break;
         default:
@@ -163,11 +164,9 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
                 case DISPLAY_BREWING:
                     goto_next_heater_action();
                     break;
-                case DISPLAY_GRAPH_TEMPERATURE: // switch between graphs
-                    display_status = DISPLAY_GRAPH_PRESSURE;
-                    break;
-                case DISPLAY_GRAPH_PRESSURE: // switch between graphs
-                    display_status = DISPLAY_GRAPH_TEMPERATURE;
+                case DISPLAY_GRAPH_TEMPERATURE:
+                case DISPLAY_GRAPH_PRESSURE:
+                    goto_mode(DISPLAY_LIVE);
                     break;
             }
         }
@@ -356,6 +355,7 @@ void loop() {
 
     static unsigned long last_update_time = 0;
     static unsigned long last_brew_timer_update = 0;
+    static unsigned long last_graph_switch_time = 0;
     const unsigned long m = millis();
 
     static double temperature = thermocouple.readCelsius();
@@ -459,9 +459,9 @@ void loop() {
         // Pressure: record 0.5 bar resolution with range from 0 to 14 => 28 values
         //   Store as uint8_t. Decode: Preal = Plog / 2
         if (display_status == DISPLAY_BREWING) {
-            // Filter out values outside of 10C to 150C range
-            if (temperature < 150 && temperature > 10)
-                temperature_log[log_index] = (uint8_t)(round(temperature * 2.0)) - 70; // Subtract 70C to normalize temperature range
+            // Filter out values outside of 60C to 150C range
+            if (temperature < 150 && temperature > 60)
+                temperature_log[log_index] = (uint8_t)(round((temperature - 70) * 2.0)); // Subtract 70C to normalize temperature range
 
             // Filter out values outside of 0 to 15 bar range
             if (pressure_bar < 15 && pressure_bar > 0)
@@ -496,9 +496,17 @@ void loop() {
                 break;
             case DISPLAY_GRAPH_TEMPERATURE:
                 display.draw_graph("Temp", temperature_log, log_index, 70, 120);
+                if ((m - last_graph_switch_time) > 3000) {
+                    goto_mode(DISPLAY_GRAPH_PRESSURE);
+                    last_graph_switch_time = m;
+                }
                 break;
             case DISPLAY_GRAPH_PRESSURE:
                 display.draw_graph("Pres", pressure_log, log_index, 0, 14);
+                if ((m - last_graph_switch_time) > 3000) {
+                    goto_mode(DISPLAY_GRAPH_TEMPERATURE);
+                    last_graph_switch_time = m;
+                }
                 break;
         }
 

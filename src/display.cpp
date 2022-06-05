@@ -116,10 +116,10 @@ void Display::draw_graph(const char *title, uint8_t *data, size_t datalen, uint8
         tft->drawLine(5, 10, 5, graph_bottom); // Y
 
         for (unsigned int i = 1; i < datalen; i++) {
-            const double d = data[i] / 2.0;
-            const double prev_d = data[i-1] / 2.0;
+            const double d = (data[i] / 2.0);
+            const double prev_d = (data[i-1] / 2.0);
 
-            if (d > max_value) max_value = d;
+            if ((d + min) > max_value) max_value = d + min;
 
             tft->drawLine(5+((i-1)*x_factor), graph_bottom-(int)(prev_d*y_factor), 5+(i*x_factor), graph_bottom-(int)(d*y_factor));
         }
