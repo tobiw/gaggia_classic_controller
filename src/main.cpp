@@ -7,7 +7,7 @@
 
 #include "SmartButton.h"
 
-//#include "heater_controller.h"
+#include "heater_controller.h"
 #include "display.h"
 
 /*
@@ -65,7 +65,7 @@ volatile uint8_t isr_heater_action = 1; // heater setting for timer OVF ISR
 unsigned int log_index = 0; // current log index when in Brewing mode
 unsigned long brew_timer = 0; // current time in seconds since entering Brewing mode
 
-//HeaterController heater_controller;
+HeaterController heater_controller;
 
 Display display;
 
