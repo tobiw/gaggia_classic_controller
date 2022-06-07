@@ -63,6 +63,7 @@ enum display_status_t {
     DISPLAY_BREWING,
     DISPLAY_GRAPH_TEMPERATURE,
     DISPLAY_GRAPH_PRESSURE,
+    DISPLAY_ERROR,
 };
 
 enum heater_action_t {
@@ -80,6 +81,7 @@ heater_action_t heater_action = HEATER_ON; // current heater setting (TODO: repl
 volatile uint8_t isr_heater_action = 1; // heater setting for timer OVF ISR
 unsigned int log_index = 0; // current log index when in Brewing mode
 unsigned long brew_timer = 0; // current time in seconds since entering Brewing mode
+char error_str[32];
 
 HeaterController heater_controller;
 
@@ -243,14 +245,9 @@ void setup() {
     button.begin(button_callback);
     pinMode(PIN_BREW_SWITCH, INPUT_PULLUP); // externally pulled-up
 
-    if (!thermocouple.begin()) {
+    if (!thermocouple.begin() || thermocouple.readCelsius() == 0.0) {
         Serial.println("ERROR thermocouple");
-        while (1) {};
-    }
-    Serial.print("Get first thermocouple reading: ");
-    Serial.println(thermocouple.readCelsius());
-}
-
+        strcpy(error_str, "thermocouple");
 void set_ssr(heater_action_t a) {
     if (a == HEATER_ON) {
         digitalWrite(PIN_SSR, HIGH);
@@ -388,6 +385,12 @@ void loop() {
     static bool brew_switch_activated = false;
     static unsigned long brew_switch_activated_time = 0;
 
+    if (display_status == DISPLAY_ERROR) {
+        display.print_text(error_str);
+        while(1) {};
+        return;
+    }
+
     // Handle buttons and switches
     SmartButton::service();
 
@@ -445,10 +448,10 @@ void loop() {
 
         // Get temperature
         temperature = thermocouple.readCelsius();
-        if (isnan(temperature)) {
+        if (isnan(temperature) || temperature < 10.0) {
             delay(1);
             temperature = thermocouple.readCelsius();
-            if (isnan(temperature)) {
+            if (isnan(temperature) || temperature < 10.0) {
                 temperature = last_temperature; // fall back to reusing last temperature reading
             }
         }
