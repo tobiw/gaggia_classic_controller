@@ -13,6 +13,7 @@
 /*
  * Pin definitions for inputs and outputs
  */
+#ifdef ATMEGA32
 #define PIN_SDA 2
 #define PIN_SCL 3
 #define PIN_BTN1 4
@@ -25,6 +26,21 @@
 #define PIN_SPI_CS 10
 #define PIN_SPI_SCLK 15
 #define PIN_SPI_MISO 14
+#endif
+#ifdef ESP32
+#define PIN_SDA X
+#define PIN_SCL X
+#define PIN_BTNX X
+#define PIN_BREW_SWITCH X
+#define PIN_SSR X
+#define PIN_ADC_PRESSURE AX
+#define PIN_LED_R X
+#define PIN_LED_G X
+#define PIN_LED_B X
+#define PIN_SPI_CS X
+#define PIN_SPI_SCLK X
+#define PIN_SPI_MISO X
+#endif
 
 /*
  * Global constants definitions
