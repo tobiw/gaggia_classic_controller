@@ -66,18 +66,10 @@ enum display_status_t {
     DISPLAY_ERROR,
 };
 
-enum heater_action_t {
-    HEATER_OFF = 0,
-    HEATER_ON,
-    HEATER_25PCT,
-    HEATER_4PCT
-};
-
 /*
  * Global variables
  */
 display_status_t display_status = DISPLAY_WARMUP_TIMER; // current program mode
-heater_action_t heater_action = HEATER_ON; // current heater setting (TODO: replace with PID controller)
 unsigned int log_index = 0; // current log index when in Brewing mode
 unsigned long brew_timer = 0; // current time in seconds since entering Brewing mode
 char error_str[32];
@@ -110,30 +102,6 @@ void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
     digitalWrite(PIN_LED_B, b == ((int)RGB_LED_ACTIVE_LOW) ? LOW : HIGH);
 }
 
-void set_heater_action(heater_action_t h) {
-    heater_action = h;
-    if (h == HEATER_OFF) set_rgb_led(0, 0, 0);
-    else set_rgb_led(1, 0, 0);
-}
-
-// TODO: remove when using PID controller
-void goto_next_heater_action() {
-    switch (heater_action) {
-        case HEATER_OFF:
-            set_heater_action(HEATER_ON);
-            break;
-        case HEATER_ON:
-            set_heater_action(HEATER_25PCT);
-            break;
-        case HEATER_25PCT:
-            set_heater_action(HEATER_4PCT);
-            break;
-        case HEATER_4PCT:
-            set_heater_action(HEATER_OFF);
-            break;
-    }
-}
-
 /*
  * Set new program mode and adjust global variables accordingly
  */
@@ -141,17 +109,14 @@ void goto_mode(display_status_t new_status) {
     display_status = new_status;
     switch (display_status) {
         case DISPLAY_LIVE:
-            set_heater_action(HEATER_4PCT);
             // Prepare logging and timer for brewing
             log_index = 0;
             brew_timer = 0;
             break;
         case DISPLAY_BREWING:
-            set_heater_action(HEATER_25PCT);
             break;
         case DISPLAY_GRAPH_TEMPERATURE:
         case DISPLAY_GRAPH_PRESSURE:
-            set_heater_action(HEATER_OFF);
             break;
         default:
             Serial.print("ERROR: Invalid new_status ");
@@ -173,7 +138,6 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
                 case DISPLAY_WARMUP_TIMER: // TODO: advance to next mode once PID is active
                 case DISPLAY_LIVE: // only switch heater action on Live Status or Brewing pages
                 case DISPLAY_BREWING:
-                    goto_next_heater_action();
                     break;
                 case DISPLAY_GRAPH_TEMPERATURE:
                 case DISPLAY_GRAPH_PRESSURE:
@@ -236,14 +200,9 @@ void setup() {
     }
 }
 
-void set_ssr(heater_action_t a) {
-    if (a == HEATER_ON) {
-        digitalWrite(PIN_SSR, HIGH);
-        set_rgb_led(1, 0, 0); // TODO: remove once heating is done by PID
-    } else if (a == HEATER_OFF) {
-        digitalWrite(PIN_SSR, LOW);
-        set_rgb_led(0, 0, 0); // TODO: remove once heating is done by PID
-    }
+void set_ssr(uint8_t enable) {
+    digitalWrite(PIN_SSR, enable ? HIGH : LOW);
+    set_rgb_led(enable ? 1 : 0, 0, 0);
 }
 
 /*
@@ -265,31 +224,6 @@ void get_buf_pressure(char *buf_pressure, double pressure_bar) {
 }
 
 /*
- * Fill string buffer with information for warmup, live status and brewing screens
- */
-void get_buf_status(char *buf_status, heater_action_t heater_action) {
-    const static char str_on[] = " ON";
-    const static char str_25pct[] = "25%";
-    const static char str_4pct[] = " 4%";
-    const static char str_off[] = "OFF";
-
-    switch (heater_action) {
-        case HEATER_ON:
-            strcpy(buf_status, str_on);
-            break;
-        case HEATER_25PCT:
-            strcpy(buf_status, str_25pct);
-            break;
-        case HEATER_4PCT:
-            strcpy(buf_status, str_4pct);
-            break;
-        default:
-            strcpy(buf_status, str_off);
-            break;
-    }
-}
-
-/*
  * Fill string buffer with information for warmup and brewing screens
  */
 void get_buf_timer(char *buf_timer, unsigned long m) {
@@ -307,8 +241,6 @@ void get_buf_timer(char *buf_timer, unsigned long m) {
  */
 void loop() {
     static char buf_temperature[16], buf_pressure[10], buf_status[8], buf_timer[8];
-
-    static heater_action_t last_heater_action = HEATER_OFF;
 
     static unsigned long last_update_time = 0;
     static unsigned long last_brew_timer_update = 0;
@@ -366,10 +298,7 @@ void loop() {
     // Set SSR based on HeaterController, not direct from button inputs or measured temperature
     // TODO: Use HeaterController (PID)
     //heater_controller.update(temperature);
-    if (heater_action != last_heater_action) {
-        set_ssr(heater_action);
-        last_heater_action = heater_action;
-    }
+    //set_ssr(...);
 
     if (display_status == DISPLAY_WARMUP_TIMER) {
         // Automatically move from Warmup to Live after 15 minutes
@@ -404,11 +333,8 @@ void loop() {
 
         // PID here?
         // Basic temperature control
-        /*if ((heater_action == HEATER_25PCT || heater_action == HEATER_ON) && temperature >= 98.0) {
-            set_heater_action(HEATER_4PCT);
-        } else if (heater_action == HEATER_4PCT && temperature < 90.0) {
-            set_heater_action(HEATER_25PCT);
-        }*/
+        if (temperature < 20.0) set_ssr(1);
+        else set_ssr(0);
 
         // Pressure conversion
         // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar
@@ -445,20 +371,17 @@ void loop() {
         switch (display_status) {
             case DISPLAY_WARMUP_TIMER:
                 get_buf_temperature(buf_temperature, temperature);
-                get_buf_status(buf_status, heater_action);
                 get_buf_timer(buf_timer, m);
                 display.draw_warmup_timer(buf_temperature, buf_timer, buf_status);
                 break;
             case DISPLAY_LIVE:
                 get_buf_temperature(buf_temperature, temperature);
                 get_buf_pressure(buf_pressure, pressure_bar);
-                get_buf_status(buf_status, heater_action);
                 display.draw_live_status(buf_temperature, buf_pressure, buf_status);
                 break;
             case DISPLAY_BREWING:
                 get_buf_temperature(buf_temperature, temperature);
                 get_buf_pressure(buf_pressure, pressure_bar);
-                get_buf_status(buf_status, heater_action);
                 get_buf_timer(buf_timer, brew_timer);
                 display.draw_brew_status(buf_temperature, buf_pressure, buf_status, buf_timer);
                 break;
