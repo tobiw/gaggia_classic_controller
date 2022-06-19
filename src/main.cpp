@@ -72,6 +72,7 @@ enum display_status_t {
 display_status_t display_status = DISPLAY_WARMUP_TIMER; // current program mode
 unsigned int log_index = 0; // current log index when in Brewing mode
 unsigned long brew_timer = 0; // current time in seconds since entering Brewing mode
+unsigned int target_temperature = 96;
 char error_str[32];
 
 #ifdef ATMEGA32
@@ -135,9 +136,13 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
     if (event == SmartButton::Event::CLICK) {
         if (clicks == 1) {
             switch (display_status) {
-                case DISPLAY_WARMUP_TIMER: // TODO: advance to next mode once PID is active
-                case DISPLAY_LIVE: // only switch heater action on Live Status or Brewing pages
+                case DISPLAY_WARMUP_TIMER:
+                    goto_mode(DISPLAY_LIVE);
+                    break;
+                case DISPLAY_LIVE: // only change target temperature on Live Status or Brewing pages
                 case DISPLAY_BREWING:
+                    target_temperature += 2;
+                    if (target_temperature > 99) target_temperature = 86;
                     break;
                 case DISPLAY_GRAPH_TEMPERATURE:
                 case DISPLAY_GRAPH_PRESSURE:
@@ -211,7 +216,7 @@ void set_ssr(uint8_t enable) {
 void get_buf_temperature(char *buf_temperature, double temperature) {
     char buf[8];
     dtostrf(temperature, 3, 1, buf);
-    sprintf(buf_temperature, "%sC", buf);
+    sprintf(buf_temperature, "%sC [%uC]", buf, target_temperature);
 }
 
 /*
@@ -333,7 +338,7 @@ void loop() {
 
         // PID here?
         // Basic temperature control
-        if (temperature < 20.0) set_ssr(1);
+        if (temperature < target_temperature) set_ssr(1);
         else set_ssr(0);
 
         // Pressure conversion
