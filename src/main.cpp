@@ -3,9 +3,12 @@
 #include <Wire.h>
 #include <SPI.h>
 #include "Adafruit_MAX31855.h"
-
-
 #include "SmartButton.h"
+
+#ifdef ESP32
+#include <WiFi.h>
+#include <gaggia_webserver.h>
+#endif
 
 #include "heater_controller.h"
 #include "display.h"
@@ -50,6 +53,9 @@
 #define AUTO_ADVANCE_TIME_WARMUP_TO_LIVE 900000 // move from Warmup to Live Status after 15 minutes
 #define AUTO_ADVANCE_TIME_LIVE_TO_BREWING 5000 // move from Live Status to Brewing after 5 seconds (if brew switch activated)
 
+const char *ssid = "...";
+const char *wpa_key = "...";
+
 /*
  * The program's main modes. These are executed fairly sequentially in a typical brew workflow:
  * Powering up the machine enters the Warmup mode for 15 minutes before moving to the Live status/idle
@@ -73,7 +79,12 @@ display_status_t display_status = DISPLAY_WARMUP_TIMER; // current program mode
 unsigned int log_index = 0; // current log index when in Brewing mode
 unsigned long brew_timer = 0; // current time in seconds since entering Brewing mode
 unsigned int target_temperature = 96;
+double temperature = 0.0;
 char error_str[32];
+
+#ifdef ESP32
+GaggiaWebServer *server;
+#endif
 
 #ifdef ATMEGA32
 const bool RGB_LED_ACTIVE_LOW = true;
@@ -172,6 +183,11 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
     }
 }
 
+char *convert_temperature_to_str(char *buf) {
+    dtostrf(temperature, 3, 1, buf);
+    return buf;
+}
+
 void setup() {
     // Sensors, inputs, and SSR output
     pinMode(PIN_ADC_PRESSURE, INPUT);
@@ -184,6 +200,20 @@ void setup() {
     // Serial output and display
     Serial.begin(115200);
     display.init();
+
+#ifdef ESP32
+    Serial.print("Connecting to WiFi ");
+    WiFi.begin(ssid, wpa_key);
+    while (WiFi.status() != WL_CONNECTED) {
+        Serial.print(".");
+        delay(500);
+    }
+    Serial.print("WiFi connected: ");
+    Serial.println(WiFi.localIP());
+
+    server = GaggiaWebServer::getInstance();
+    server->begin(&temperature);
+#endif
 
     // RGB LEDs
 #define LED_TEST_DELAY 200
@@ -215,8 +245,7 @@ void set_ssr(uint8_t enable) {
  */
 void get_buf_temperature(char *buf_temperature, double temperature) {
     char buf[8];
-    dtostrf(temperature, 3, 1, buf);
-    sprintf(buf_temperature, "%sC [%uC]", buf, target_temperature);
+    sprintf(buf_temperature, "%sC [%uC]", convert_temperature_to_str(buf), target_temperature);
 }
 
 /*
@@ -252,7 +281,7 @@ void loop() {
     static unsigned long last_graph_switch_time = 0;
     const unsigned long m = millis();
 
-    static double temperature = thermocouple.readCelsius();
+    temperature = thermocouple.readCelsius();
     static double last_temperature = 0;
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
@@ -274,6 +303,11 @@ void loop() {
 
     // Handle buttons and switches
     SmartButton::service();
+
+#ifdef ESP32
+    // Handle HTTP clients
+    server->service();
+#endif
 
     // Brew switch is a signal from an AC detection circuit (opto-isolated) so it
     // alternates between LOW and HIGH at the AC frequency. If switch is off, signal
