@@ -28,18 +28,18 @@
 #define PIN_SPI_MISO 14
 #endif
 #ifdef ESP32
-#define PIN_SDA X
-#define PIN_SCL X
-#define PIN_BTNX X
-#define PIN_BREW_SWITCH X
-#define PIN_SSR X
-#define PIN_ADC_PRESSURE AX
-#define PIN_LED_R X
-#define PIN_LED_G X
-#define PIN_LED_B X
-#define PIN_SPI_CS X
-#define PIN_SPI_SCLK X
-#define PIN_SPI_MISO X
+#define PIN_SDA 21
+#define PIN_SCL 22
+#define PIN_BTN1 32
+#define PIN_BREW_SWITCH 33
+#define PIN_SSR 25
+#define PIN_ADC_PRESSURE 35
+#define PIN_LED_R 18
+#define PIN_LED_G 17
+#define PIN_LED_B 16
+#define PIN_SPI_CS 27
+#define PIN_SPI_SCLK 14
+#define PIN_SPI_MISO 12
 #endif
 
 /*
@@ -78,10 +78,15 @@ enum heater_action_t {
  */
 display_status_t display_status = DISPLAY_WARMUP_TIMER; // current program mode
 heater_action_t heater_action = HEATER_ON; // current heater setting (TODO: replace with PID controller)
-volatile uint8_t isr_heater_action = 1; // heater setting for timer OVF ISR
 unsigned int log_index = 0; // current log index when in Brewing mode
 unsigned long brew_timer = 0; // current time in seconds since entering Brewing mode
 char error_str[32];
+
+#ifdef ATMEGA32
+const bool RGB_LED_ACTIVE_LOW = true;
+#else
+const bool RGB_LED_ACTIVE_LOW = false;
+#endif
 
 HeaterController heater_controller;
 
@@ -100,27 +105,15 @@ SmartButton button(PIN_BTN1, SmartButton::InputType::NORMAL_HIGH);
  * blue: inactive/cooling down
  */
 void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
-    digitalWrite(PIN_LED_R, r == 1 ? LOW : HIGH);
-    digitalWrite(PIN_LED_G, g == 1 ? LOW : HIGH);
-    digitalWrite(PIN_LED_B, b == 1 ? LOW : HIGH);
+    digitalWrite(PIN_LED_R, r == ((int)RGB_LED_ACTIVE_LOW) ? LOW : HIGH);
+    digitalWrite(PIN_LED_G, g == ((int)RGB_LED_ACTIVE_LOW) ? LOW : HIGH);
+    digitalWrite(PIN_LED_B, b == ((int)RGB_LED_ACTIVE_LOW) ? LOW : HIGH);
 }
 
 void set_heater_action(heater_action_t h) {
     heater_action = h;
-    switch (heater_action) {
-        case HEATER_OFF:
-            isr_heater_action = 0;
-            break;
-        case HEATER_ON:
-            isr_heater_action = 1;
-            break;
-        case HEATER_25PCT:
-            isr_heater_action = 2;
-            break;
-        case HEATER_4PCT:
-            isr_heater_action = 3;
-            break;
-    }
+    if (h == HEATER_OFF) set_rgb_led(0, 0, 0);
+    else set_rgb_led(1, 0, 0);
 }
 
 // TODO: remove when using PID controller
@@ -211,17 +204,17 @@ void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
 }
 
 void setup() {
+    // Sensors, inputs, and SSR output
+    pinMode(PIN_ADC_PRESSURE, INPUT);
+    pinMode(PIN_SSR, OUTPUT);
+    digitalWrite(PIN_SSR, LOW);
+    pinMode(PIN_BTN1, INPUT_PULLUP);
+    button.begin(button_callback);
+    pinMode(PIN_BREW_SWITCH, INPUT_PULLUP); // externally pulled-up
+
     // Serial output and display
     Serial.begin(115200);
     display.init();
-
-    // Configure timer 1, to be used for driving heater SSR
-    noInterrupts();
-    TCCR1A = 0;
-    TCNT1 = 57723; // default 0.5 s interval
-    TCCR1B = _BV(CS10) | _BV(CS12);
-    TIMSK1 |= _BV(TOIE1);
-    interrupts();
 
     // RGB LEDs
 #define LED_TEST_DELAY 200
@@ -237,17 +230,12 @@ void setup() {
     set_rgb_led(0, 0, 0);
     delay(LED_TEST_DELAY);
 
-    // Sensors, inputs, and SSR output
-    pinMode(PIN_ADC_PRESSURE, INPUT);
-    pinMode(PIN_SSR, OUTPUT);
-    digitalWrite(PIN_SSR, LOW);
-    pinMode(PIN_BTN1, INPUT_PULLUP);
-    button.begin(button_callback);
-    pinMode(PIN_BREW_SWITCH, INPUT_PULLUP); // externally pulled-up
-
     if (!thermocouple.begin() || thermocouple.readCelsius() == 0.0) {
         Serial.println("ERROR thermocouple");
         strcpy(error_str, "thermocouple");
+    }
+}
+
 void set_ssr(heater_action_t a) {
     if (a == HEATER_ON) {
         digitalWrite(PIN_SSR, HIGH);
@@ -255,50 +243,6 @@ void set_ssr(heater_action_t a) {
     } else if (a == HEATER_OFF) {
         digitalWrite(PIN_SSR, LOW);
         set_rgb_led(0, 0, 0); // TODO: remove once heating is done by PID
-    } else {
-        // Driving of SSR occurs in TIMER1_OVF ISR
-    }
-}
-
-volatile bool current_ssr_output = false;
-
-/*
- * Timer 1 overflow interrupt service routine
- * Switches timer value (TCNT1) according to current on-duty and off-duty cycles for the heater.
- *
- * Python program to calculate TCNT value:
- * def calc(p):
- *   timer_clock = cpu/prescale
- *   return (65535 - (p * timer_clock), 65535 - ((1-p) * timer_clock))
- */
-ISR(TIMER1_OVF_vect)
-{
-    if (isr_heater_action > 1) { // > 1 means PWM
-        current_ssr_output = !current_ssr_output;
-        digitalWrite(PIN_SSR, current_ssr_output ? HIGH : LOW);
-        digitalWrite(PIN_LED_R, current_ssr_output ? LOW : HIGH);
-
-        // Set 65535-x according to next PWM phase when duty cycle is < 50%
-        // 50%: (16MHz / 1024 / (65535-15625) = 57723 = 1/2 s on and off
-        // 25%: 61629 on, 53816 off
-        // 12%: 63660 on, 51785 off
-        if (isr_heater_action == 2) { // 25%
-            if (current_ssr_output) { // on cycle
-                TCNT1 = 61629;
-            } else { // off cycle
-                TCNT1 = 53816;
-            }
-        } else if (isr_heater_action == 3) { // 4%
-            if (current_ssr_output) { // on cycle
-                TCNT1 = 64910;
-            } else { // off cycle
-                TCNT1 = 50535;
-            }
-        } else {
-            TCNT1 = 57723;
-        }
-    } else {
-        TCNT1 = 57723; // default 0.5 s interval
     }
 }
 
@@ -386,7 +330,7 @@ void loop() {
     static unsigned long brew_switch_activated_time = 0;
 
     if (display_status == DISPLAY_ERROR) {
-        display.print_text(error_str);
+        //display.print_text(error_str);
         while(1) {};
         return;
     }
@@ -460,16 +404,21 @@ void loop() {
 
         // PID here?
         // Basic temperature control
-        if ((heater_action == HEATER_25PCT || heater_action == HEATER_ON) && temperature >= 98.0) {
+        /*if ((heater_action == HEATER_25PCT || heater_action == HEATER_ON) && temperature >= 98.0) {
             set_heater_action(HEATER_4PCT);
         } else if (heater_action == HEATER_4PCT && temperature < 90.0) {
             set_heater_action(HEATER_25PCT);
-        }
+        }*/
 
         // Pressure conversion
         // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar
         // voltage range of sensor is 0.5-4.5V = 4V
-        double pressure_V = pressure_raw * (5.0 / 1024.0); // factor is (maxV / maxDigitalValue)
+#ifdef ESP32
+#define ADC_MAX_V 3.3
+#else
+#define ADC_MAX_V 5.0
+#endif
+        double pressure_V = pressure_raw * (ADC_MAX_V / 1024.0); // factor is (maxV / maxDigitalValue)
         double pressure_bar = (pressure_V - 0.17) * 3.0; // subtract 1 bar pressure voltage and apply conversion factor
 
         // Record temperature and pressure to log
