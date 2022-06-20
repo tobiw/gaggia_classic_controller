@@ -78,7 +78,8 @@ enum display_status_t {
 display_status_t display_status = DISPLAY_WARMUP_TIMER; // current program mode
 unsigned int log_index = 0; // current log index when in Brewing mode
 unsigned long brew_timer = 0; // current time in seconds since entering Brewing mode
-unsigned int target_temperature = 96;
+uint8_t target_temperature = 96;
+uint8_t temperature_overshoot_guard = 3;
 double temperature = 0.0;
 char error_str[32];
 
@@ -212,7 +213,7 @@ void setup() {
     Serial.println(WiFi.localIP());
 
     server = GaggiaWebServer::getInstance();
-    server->begin(&temperature);
+    server->begin(&temperature, &target_temperature, &temperature_overshoot_guard, (char**)systemlog);
 #endif
 
     // RGB LEDs
@@ -372,8 +373,13 @@ void loop() {
 
         // PID here?
         // Basic temperature control
-        if (temperature < target_temperature) set_ssr(1);
-        else set_ssr(0);
+        if (temp_rising) {
+            if (temperature < (target_temperature - temperature_overshoot_guard)) set_ssr(1);
+            else set_ssr(0);
+        } else {
+            if (temperature > target_temperature) set_ssr(0);
+            else set_ssr(1);
+        }
 
         // Pressure conversion
         // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar

@@ -7,11 +7,11 @@ class GaggiaWebServer {
     public:
         static GaggiaWebServer *getInstance();
 
-        void begin(double *temperature);
+        void begin(double *temperature, uint8_t *target_temperature, uint8_t *overshoot_guard, char **systemlog);
         void service();
         void send(int code, char *type, char *payload);
-        void get_http_response_index(char *buf_response);
-        void get_http_response_api_temperature(char *buf_response);
+        void get_http_response_index();
+        void get_http_response_api_temperature();
 
         static GaggiaWebServer *server;
 
@@ -20,6 +20,9 @@ class GaggiaWebServer {
 
         WebServer *_server;
         double *_temperature;
+        uint8_t *_target_temperature;
+        uint8_t *_overshoot_guard;
+        char **_systemlog;
 };
 
 #endif
