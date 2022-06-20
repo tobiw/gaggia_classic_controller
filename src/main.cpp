@@ -81,7 +81,8 @@ unsigned long brew_timer = 0; // current time in seconds since entering Brewing 
 uint8_t target_temperature = 96;
 uint8_t temperature_overshoot_guard = 3;
 double temperature = 0.0;
-char error_str[32];
+static char systemlog[32][32];
+static uint8_t cur_systemlog_idx = 0;
 
 #ifdef ESP32
 GaggiaWebServer *server;
@@ -102,6 +103,23 @@ Adafruit_MAX31855 thermocouple(PIN_SPI_SCLK, PIN_SPI_CS, PIN_SPI_MISO);
 // Debounces button with click, double-click and long-press functionality
 using namespace smartbutton;
 SmartButton button(PIN_BTN1, SmartButton::InputType::NORMAL_HIGH);
+
+void log(char *m) {
+    strncpy(systemlog[cur_systemlog_idx++], m, 32); 
+    Serial.print("Log[");
+    Serial.print(cur_systemlog_idx-1);
+    Serial.print("]> ");
+    Serial.println(systemlog[cur_systemlog_idx-1]);
+    if (cur_systemlog_idx >= 32) cur_systemlog_idx = 0;
+}
+
+bool get_log(uint8_t i, char *buf) {
+    if (i < 32 && strlen(systemlog[i]) > 0) {
+        strncpy(buf, systemlog[i], 32);
+        return true;
+    }
+    return false;
+}
 
 /*
  * Set RGB LED output
@@ -190,6 +208,8 @@ char *convert_temperature_to_str(char *buf) {
 }
 
 void setup() {
+    memset(systemlog, 0, 1024);
+
     // Sensors, inputs, and SSR output
     pinMode(PIN_ADC_PRESSURE, INPUT);
     pinMode(PIN_SSR, OUTPUT);
@@ -232,7 +252,6 @@ void setup() {
 
     if (!thermocouple.begin() || thermocouple.readCelsius() == 0.0) {
         Serial.println("ERROR thermocouple");
-        strcpy(error_str, "thermocouple");
     }
 }
 
@@ -297,7 +316,6 @@ void loop() {
     static unsigned long brew_switch_activated_time = 0;
 
     if (display_status == DISPLAY_ERROR) {
-        //display.print_text(error_str);
         while(1) {};
         return;
     }
@@ -369,7 +387,13 @@ void loop() {
             }
         }
         last_temperature = temperature;
-        Serial.println(temperature);
+
+        {
+        char buf_serial[32], buf_temp[8];
+        sprintf(buf_serial, "T: %sC [>%uC, -%uC, ^%u]", convert_temperature_to_str(buf_temp), target_temperature, temperature_overshoot_guard, temp_rising ? 1 : 0);
+        //Serial.println(buf_serial);
+        log(buf_serial);
+        }
 
         // PID here?
         // Basic temperature control

@@ -25,6 +25,11 @@ void http_api_temperature() {
     GaggiaWebServer::server->send(200, "application/json", buf_response);
 }
 
+void http_api_systemlog() {
+    GaggiaWebServer::server->get_http_response_api_systemlog();
+    GaggiaWebServer::server->send(200, "text/html", buf_response);
+}
+
 GaggiaWebServer::GaggiaWebServer() {
 }
 
@@ -37,6 +42,7 @@ void GaggiaWebServer::begin(double *temperature, uint8_t *target_temperature, ui
     _server->begin();
     _server->on("/", http_index);
     _server->on("/temperature", http_api_temperature);
+    _server->on("/systemlog", http_api_systemlog);
 }
 
 void GaggiaWebServer::service() {
@@ -57,4 +63,19 @@ void GaggiaWebServer::get_http_response_api_temperature() {
     char buf[8];
     sprintf(buf_response, "{ \"temperature\": { \"current\": %s, \"target\": %u, \"overshoot_guard\": %u } }",
             convert_temperature_to_str(_temperature, buf), *_target_temperature, *_overshoot_guard);
+}
+
+bool get_log(uint8_t i, char *buf);
+
+void GaggiaWebServer::get_http_response_api_systemlog() {
+    char buf[32];
+    uint8_t i;
+
+    strcpy(buf_response, "<html><head></head><body><h1>Log</h1><ul>");
+    while (get_log(i++, buf)) {
+        strcat(buf_response, "<li>");
+        strcat(buf_response, buf);
+        strcat(buf_response, "</li>");
+    }
+    strcat(buf_response, "</ul></body></html>");
 }

@@ -12,6 +12,7 @@ class GaggiaWebServer {
         void send(int code, char *type, char *payload);
         void get_http_response_index();
         void get_http_response_api_temperature();
+        void get_http_response_api_systemlog();
 
         static GaggiaWebServer *server;
 
