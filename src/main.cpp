@@ -10,8 +10,9 @@
 #include <gaggia_webserver.h>
 #endif
 
-#include "heater_controller.h"
-#include "display.h"
+#include <heater_controller.h>
+#include <display.h>
+#include <systemlog.h>
 
 /*
  * Pin definitions for inputs and outputs
@@ -81,8 +82,8 @@ unsigned long brew_timer = 0; // current time in seconds since entering Brewing 
 uint8_t target_temperature = 96;
 uint8_t temperature_overshoot_guard = 3;
 double temperature = 0.0;
-static char systemlog[32][32];
-static uint8_t cur_systemlog_idx = 0;
+
+extern Systemlog systemlog;
 
 #ifdef ESP32
 GaggiaWebServer *server;
@@ -103,23 +104,6 @@ Adafruit_MAX31855 thermocouple(PIN_SPI_SCLK, PIN_SPI_CS, PIN_SPI_MISO);
 // Debounces button with click, double-click and long-press functionality
 using namespace smartbutton;
 SmartButton button(PIN_BTN1, SmartButton::InputType::NORMAL_HIGH);
-
-void log(char *m) {
-    strncpy(systemlog[cur_systemlog_idx++], m, 32); 
-    Serial.print("Log[");
-    Serial.print(cur_systemlog_idx-1);
-    Serial.print("]> ");
-    Serial.println(systemlog[cur_systemlog_idx-1]);
-    if (cur_systemlog_idx >= 32) cur_systemlog_idx = 0;
-}
-
-bool get_log(uint8_t i, char *buf) {
-    if (i < 32 && strlen(systemlog[i]) > 0) {
-        strncpy(buf, systemlog[i], 32);
-        return true;
-    }
-    return false;
-}
 
 /*
  * Set RGB LED output
@@ -208,8 +192,6 @@ char *convert_temperature_to_str(char *buf) {
 }
 
 void setup() {
-    memset(systemlog, 0, 1024);
-
     // Sensors, inputs, and SSR output
     pinMode(PIN_ADC_PRESSURE, INPUT);
     pinMode(PIN_SSR, OUTPUT);
@@ -233,7 +215,7 @@ void setup() {
     Serial.println(WiFi.localIP());
 
     server = GaggiaWebServer::getInstance();
-    server->begin(&temperature, &target_temperature, &temperature_overshoot_guard, (char**)systemlog);
+    server->begin(&temperature, &target_temperature, &temperature_overshoot_guard);
 #endif
 
     // RGB LEDs
@@ -386,13 +368,18 @@ void loop() {
                 temperature = last_temperature; // fall back to reusing last temperature reading
             }
         }
+
+        bool temp_rising = last_temperature < temperature;
+
         last_temperature = temperature;
 
+        // Log current state
         {
-        char buf_serial[32], buf_temp[8];
-        sprintf(buf_serial, "T: %sC [>%uC, -%uC, ^%u]", convert_temperature_to_str(buf_temp), target_temperature, temperature_overshoot_guard, temp_rising ? 1 : 0);
-        //Serial.println(buf_serial);
-        log(buf_serial);
+        char buf_serial[64], buf_temp[8];
+        sprintf(buf_serial, "[%u] T: %sC [>%uC, -%uC, ^%u]",
+                (unsigned int)(m/1000),
+                convert_temperature_to_str(buf_temp), target_temperature, temperature_overshoot_guard, temp_rising ? 1 : 0);
+        systemlog.log(buf_serial);
         }
 
         // PID here?

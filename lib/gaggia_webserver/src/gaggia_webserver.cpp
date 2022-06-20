@@ -1,5 +1,7 @@
 #include <gaggia_webserver.h>
 
+extern Systemlog systemlog;
+
 #define RESPONSE_SIZE 1500
 static char buf_response[RESPONSE_SIZE];
 
@@ -33,12 +35,11 @@ void http_api_systemlog() {
 GaggiaWebServer::GaggiaWebServer() {
 }
 
-void GaggiaWebServer::begin(double *temperature, uint8_t *target_temperature, uint8_t *overshoot_guard, char **systemlog) {
+void GaggiaWebServer::begin(double *temperature, uint8_t *target_temperature, uint8_t *overshoot_guard) {
     _server = new WebServer(80);
     _temperature = temperature;
     _target_temperature = target_temperature;
     _overshoot_guard = overshoot_guard;
-    _systemlog = systemlog;
     _server->begin();
     _server->on("/", http_index);
     _server->on("/temperature", http_api_temperature);
@@ -65,14 +66,12 @@ void GaggiaWebServer::get_http_response_api_temperature() {
             convert_temperature_to_str(_temperature, buf), *_target_temperature, *_overshoot_guard);
 }
 
-bool get_log(uint8_t i, char *buf);
-
 void GaggiaWebServer::get_http_response_api_systemlog() {
-    char buf[32];
+    char buf[SYSTEMLOG_ENTRY_SIZE];
     uint8_t i;
 
     strcpy(buf_response, "<html><head></head><body><h1>Log</h1><ul>");
-    while (get_log(i++, buf)) {
+    while (systemlog.get_log(i++, buf)) {
         strcat(buf_response, "<li>");
         strcat(buf_response, buf);
         strcat(buf_response, "</li>");
