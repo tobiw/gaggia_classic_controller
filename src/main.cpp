@@ -50,7 +50,7 @@
  * Global constants definitions
  */
 #define DISPLAY_UPDATE_INTERVAL 500 // used in the main loop to only update the display periodically
-#define RECORD_LOG_SIZE 100 // fixed size for the temperature and pressure logs
+#define RECORD_LOG_SIZE 120 // fixed size for the temperature and pressure logs
 #define AUTO_ADVANCE_TIME_WARMUP_TO_LIVE 900000 // move from Warmup to Live Status after 15 minutes
 #define AUTO_ADVANCE_TIME_LIVE_TO_BREWING 5000 // move from Live Status to Brewing after 5 seconds (if brew switch activated)
 
@@ -292,6 +292,7 @@ void loop() {
 
     // Record pressure (in bar * 10) every 0.5 s
     static uint8_t pressure_log[RECORD_LOG_SIZE];
+    static uint8_t update_cycle = 0;
 
     static uint16_t brew_switch_check_counter = 0;
     static bool brew_switch_activated = false;
@@ -408,7 +409,9 @@ void loop() {
         //   Store as uint8_t. Decode: Treal = Tlog / 2 + 70
         // Pressure: record 0.5 bar resolution with range from 0 to 14 => 28 values
         //   Store as uint8_t. Decode: Preal = Plog / 2
-        if (display_status == DISPLAY_BREWING) {
+        if (display_status == DISPLAY_BREWING && (update_cycle++) >= 1) {
+            update_cycle = 0;
+
             // Filter out values outside of 60C to 150C range
             if (temperature < 150 && temperature > 60)
                 temperature_log[log_index] = (uint8_t)(round((temperature - 70) * 2.0)); // Subtract 70C to normalize temperature range
