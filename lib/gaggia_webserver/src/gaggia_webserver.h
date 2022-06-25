@@ -11,9 +11,11 @@ class GaggiaWebServer {
         void begin(double *temperature, uint8_t *target_temperature, uint8_t *overshoot_guard);
         void service();
         void send(int code, char *type, char *payload);
+        String get_arg(int i);
         void get_http_response_index();
         void get_http_response_api_temperature();
         void get_http_response_api_systemlog();
+        void handle_http_post_set_pwm(int pwm);
 
         static GaggiaWebServer *server;
 

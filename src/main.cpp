@@ -8,6 +8,7 @@
 #ifdef ESP32
 #include <WiFi.h>
 #include <gaggia_webserver.h>
+#include <ESP32_PWM.h>
 #endif
 
 #include <heater_controller.h>
@@ -82,6 +83,10 @@ unsigned long brew_timer = 0; // current time in seconds since entering Brewing 
 uint8_t target_temperature = 96;
 uint8_t temperature_overshoot_guard = 3;
 double temperature = 0.0;
+
+ESP32Timer timer1(1);
+ESP32_PWM isr_pwm;
+int isr_pwm_channel = -1;
 
 extern Systemlog systemlog;
 
@@ -191,6 +196,11 @@ char *convert_temperature_to_str(char *buf) {
     return buf;
 }
 
+bool IRAM_ATTR TimerHandler(void *timerNo) {
+    isr_pwm.run();
+    return true;
+}
+
 void setup() {
     // Sensors, inputs, and SSR output
     pinMode(PIN_ADC_PRESSURE, INPUT);
@@ -199,6 +209,11 @@ void setup() {
     pinMode(PIN_BTN1, INPUT_PULLUP);
     button.begin(button_callback);
     pinMode(PIN_BREW_SWITCH, INPUT_PULLUP); // externally pulled-up
+
+    // Timer-driven PWM output for heater SSR control
+#ifdef ESP32
+    timer1.attachInterruptInterval(20 /* us */, TimerHandler);
+#endif
 
     // Serial output and display
     Serial.begin(115200);
@@ -237,9 +252,24 @@ void setup() {
     }
 }
 
-void set_ssr(uint8_t enable) {
-    digitalWrite(PIN_SSR, enable ? HIGH : LOW);
-    set_rgb_led(enable ? 1 : 0, 0, 0);
+void set_ssr(uint8_t pwm_percent) {
+#ifdef ESP32
+    // Set PWM frequency to 10 Hz so that mains voltage can swing multiple times.
+    // Set duty cycle according to how much to enable heater.
+    if (pwm_percent == 0) {
+        if (isr_pwm_channel > -1) {
+            isr_pwm.deleteChannel(isr_pwm_channel);
+            isr_pwm_channel = -1;
+        }
+    } else if (isr_pwm_channel == -1) {
+        isr_pwm_channel = isr_pwm.setPWM(PIN_SSR, 5, pwm_percent);
+    } else {
+        isr_pwm.modifyPWMChannel(isr_pwm_channel, PIN_SSR, 5, pwm_percent);
+    }
+#else
+    digitalWrite(PIN_SSR, pwm_percent == 0 ? LOW : HIGH);
+#endif
+    set_rgb_led(pwm_percent == 0 ? 0 : 1, 0, 0);
 }
 
 /*
@@ -385,13 +415,13 @@ void loop() {
 
         // PID here?
         // Basic temperature control
-        if (temp_rising) {
-            if (temperature < (target_temperature - temperature_overshoot_guard)) set_ssr(1);
+        /*if (temp_rising) {
+            if (temperature < (target_temperature - temperature_overshoot_guard)) set_ssr(100);
             else set_ssr(0);
         } else {
             if (temperature > target_temperature) set_ssr(0);
-            else set_ssr(1);
-        }
+            else set_ssr(100);
+        }*/
 
         // Pressure conversion
         // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar

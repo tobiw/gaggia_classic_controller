@@ -32,6 +32,11 @@ void http_api_systemlog() {
     GaggiaWebServer::server->send(200, "text/html", buf_response);
 }
 
+void http_api_post_set_pwm() {
+    GaggiaWebServer::server->handle_http_post_set_pwm(atoi(GaggiaWebServer::server->get_arg(0).c_str()));
+    GaggiaWebServer::server->send(200, "text/plain", "OK");
+}
+
 GaggiaWebServer::GaggiaWebServer() {
 }
 
@@ -44,6 +49,7 @@ void GaggiaWebServer::begin(double *temperature, uint8_t *target_temperature, ui
     _server->on("/", http_index);
     _server->on("/temperature", http_api_temperature);
     _server->on("/systemlog", http_api_systemlog);
+    _server->on("/set_pwm", HTTP_POST, http_api_post_set_pwm);
 }
 
 void GaggiaWebServer::service() {
@@ -52,6 +58,10 @@ void GaggiaWebServer::service() {
 
 void GaggiaWebServer::send(int code, char *type, char *payload) {
     _server->send(code, type, payload);
+}
+
+String GaggiaWebServer::get_arg(int i) {
+    return _server->arg(i);
 }
 
 void GaggiaWebServer::get_http_response_index() {
@@ -77,4 +87,10 @@ void GaggiaWebServer::get_http_response_api_systemlog() {
         strcat(buf_response, "</li>");
     }
     strcat(buf_response, "</ul></body></html>");
+}
+
+void set_ssr(uint8_t pwm_percent);
+
+void GaggiaWebServer::handle_http_post_set_pwm(int pwm) {
+    set_ssr(pwm);
 }
