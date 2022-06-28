@@ -21,10 +21,8 @@ PID::PID(double* Input, double* Output, double* Setpoint,
     mySetpoint = Setpoint;
     inAuto = false;
 
-    PID::SetOutputLimits(0, 255);				//default output limit corresponds to
-												//the arduino pwm limits
-
-    SampleTime = 100;							//default Controller Sample Time is 0.1 seconds
+    PID::SetOutputLimits(0, 100);
+    SampleTime = 200;
 
     PID::SetControllerDirection(ControllerDirection);
     PID::SetTunings(Kp, Ki, Kd, POn);
@@ -85,7 +83,7 @@ bool PID::Compute()
       /*Remember some variables for next time*/
       lastInput = input;
       lastTime = now;
-	    return true;
+      return true;
    }
    else return false;
 }
@@ -223,8 +221,13 @@ HeaterController::HeaterController()
 {
     current_temperature = 0;
     target_temperature = 90;
-    pid = new PID(&current_temperature, &pid_output, &target_temperature, 1, 1, 1, DIRECT);
+    pid = new PID(&current_temperature, &pid_output, &target_temperature, 1.5, 0.5, 1.5, DIRECT);
     pid->SetMode(AUTOMATIC);
+}
+
+void HeaterController::set_pid_parameters(double p, double i, double d)
+{
+    pid->SetTunings(p, i, d);
 }
 
 /*

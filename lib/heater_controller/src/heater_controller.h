@@ -87,6 +87,7 @@ class PID
 class HeaterController {
     public:
         HeaterController();
+        void set_pid_parameters(double p, double i, double d);
         void set_target(int t);
         void update(int current_temperature);
         double get_output();
