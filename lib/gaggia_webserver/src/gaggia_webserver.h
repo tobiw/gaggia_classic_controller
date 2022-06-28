@@ -16,6 +16,9 @@ class GaggiaWebServer {
         void get_http_response_api_temperature();
         void get_http_response_api_systemlog();
         void handle_http_post_set_pwm(int pwm);
+        void handle_http_post_set_pid(int p, int i, int d);
+        void handle_http_post_set_temperature(int temp);
+        void handle_http_post_set_target_temperature(int temp);
 
         static GaggiaWebServer *server;
 
