@@ -1,0 +1,12 @@
+#define PIN_SDA 21
+#define PIN_SCL 22
+#define PIN_BTN1 32
+#define PIN_BREW_SWITCH 33
+#define PIN_SSR 25
+#define PIN_ADC_PRESSURE 35
+#define PIN_LED_R 18
+#define PIN_LED_G 17
+#define PIN_LED_B 16
+#define PIN_SPI_CS 27
+#define PIN_SPI_SCLK 14
+#define PIN_SPI_MISO 12

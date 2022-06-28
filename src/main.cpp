@@ -7,44 +7,21 @@
 
 #ifdef ESP32
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <gaggia_webserver.h>
 #include <ESP32_PWM.h>
 #endif
 
-#include <heater_controller.h>
-#include <display.h>
-#include <systemlog.h>
+#include <application.h>
 
 /*
  * Pin definitions for inputs and outputs
  */
 #ifdef ATMEGA32
-#define PIN_SDA 2
-#define PIN_SCL 3
-#define PIN_BTN1 4
-#define PIN_BREW_SWITCH 8
-#define PIN_SSR 5
-#define PIN_ADC_PRESSURE A0
-#define PIN_LED_R 19
-#define PIN_LED_G 20
-#define PIN_LED_B 21
-#define PIN_SPI_CS 10
-#define PIN_SPI_SCLK 15
-#define PIN_SPI_MISO 14
+#include "pin_defines_atmega32.h"
 #endif
 #ifdef ESP32
-#define PIN_SDA 21
-#define PIN_SCL 22
-#define PIN_BTN1 32
-#define PIN_BREW_SWITCH 33
-#define PIN_SSR 25
-#define PIN_ADC_PRESSURE 35
-#define PIN_LED_R 18
-#define PIN_LED_G 17
-#define PIN_LED_B 16
-#define PIN_SPI_CS 27
-#define PIN_SPI_SCLK 14
-#define PIN_SPI_MISO 12
+#include "pin_defines_esp32.h"
 #endif
 
 /*
@@ -58,40 +35,20 @@
 const char *ssid = "...";
 const char *wpa_key = "...";
 
-/*
- * The program's main modes. These are executed fairly sequentially in a typical brew workflow:
- * Powering up the machine enters the Warmup mode for 15 minutes before moving to the Live status/idle
- * screen (PID maintains set temperature). When the brew switch is activated the program moves to the
- * brewing mode which displays a shot timer and records temperature and pressure data. When the brew is
- * done the temperature and pressure graphs are displayed.
- */
-enum display_status_t {
-    DISPLAY_WARMUP_TIMER = 0,
-    DISPLAY_LIVE,
-    DISPLAY_BREWING,
-    DISPLAY_GRAPH_TEMPERATURE,
-    DISPLAY_GRAPH_PRESSURE,
-    DISPLAY_ERROR,
-};
 
 /*
  * Global variables
  */
-display_status_t display_status = DISPLAY_WARMUP_TIMER; // current program mode
 unsigned int log_index = 0; // current log index when in Brewing mode
 unsigned long brew_timer = 0; // current time in seconds since entering Brewing mode
-uint8_t target_temperature = 96;
+uint8_t target_temperature = 94;
 uint8_t temperature_overshoot_guard = 3;
 double temperature = 0.0;
 
+#ifdef ESP32
 ESP32Timer timer1(1);
 ESP32_PWM isr_pwm;
 int isr_pwm_channel = -1;
-
-extern Systemlog systemlog;
-
-#ifdef ESP32
-GaggiaWebServer *server;
 #endif
 
 #ifdef ATMEGA32
@@ -99,10 +56,6 @@ const bool RGB_LED_ACTIVE_LOW = true;
 #else
 const bool RGB_LED_ACTIVE_LOW = false;
 #endif
-
-HeaterController heater_controller;
-
-Display display;
 
 Adafruit_MAX31855 thermocouple(PIN_SPI_SCLK, PIN_SPI_CS, PIN_SPI_MISO);
 
@@ -123,66 +76,43 @@ void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 /*
- * Set new program mode and adjust global variables accordingly
- */
-void goto_mode(display_status_t new_status) {
-    display_status = new_status;
-    switch (display_status) {
-        case DISPLAY_LIVE:
-            // Prepare logging and timer for brewing
-            log_index = 0;
-            brew_timer = 0;
-            break;
-        case DISPLAY_BREWING:
-            break;
-        case DISPLAY_GRAPH_TEMPERATURE:
-        case DISPLAY_GRAPH_PRESSURE:
-            break;
-        default:
-            Serial.print("ERROR: Invalid new_status ");
-            Serial.print((int)new_status);
-            Serial.println(" passed to goto_mode");
-            break;
-    }
-}
-
-/*
  * Handle button actions:
- * click: set new heater (TODO: remove when using PID controller), and toggle between temperature and pressure graphs
+ * click: set new target temperature, and toggle between temperature and pressure graphs
  * long-press: go to next mode
  */
 void button_callback(SmartButton *b, SmartButton::Event event, int clicks) {
     if (event == SmartButton::Event::CLICK) {
         if (clicks == 1) {
-            switch (display_status) {
+            switch (app()->get_current_display_status()) {
                 case DISPLAY_WARMUP_TIMER:
-                    goto_mode(DISPLAY_LIVE);
+                    app()->goto_mode(DISPLAY_LIVE);
                     break;
                 case DISPLAY_LIVE: // only change target temperature on Live Status or Brewing pages
                 case DISPLAY_BREWING:
                     target_temperature += 2;
                     if (target_temperature > 99) target_temperature = 86;
+                    app()->heatercontroller()->set_target(target_temperature);
                     break;
                 case DISPLAY_GRAPH_TEMPERATURE:
                 case DISPLAY_GRAPH_PRESSURE:
-                    goto_mode(DISPLAY_LIVE);
+                    app()->goto_mode(DISPLAY_LIVE);
                     break;
             }
         }
     } else if (event == SmartButton::Event::HOLD) {
-        switch (display_status) {
-            case DISPLAY_WARMUP_TIMER: // TODO: remove once PID is active
-                goto_mode(DISPLAY_LIVE);
+        switch (app()->get_current_display_status()) {
+            case DISPLAY_WARMUP_TIMER:
+                app()->goto_mode(DISPLAY_LIVE);
                 break;
             case DISPLAY_LIVE:
-                goto_mode(DISPLAY_BREWING);
+                app()->goto_mode(DISPLAY_BREWING);
                 break;
             case DISPLAY_BREWING:
-                goto_mode(DISPLAY_GRAPH_TEMPERATURE);
+                app()->goto_mode(DISPLAY_GRAPH_TEMPERATURE);
                 break;
             case DISPLAY_GRAPH_TEMPERATURE:
             case DISPLAY_GRAPH_PRESSURE:
-                goto_mode(DISPLAY_LIVE);
+                app()->goto_mode(DISPLAY_LIVE);
                 break;
             //case DISPLAY_WARMUP_TIMER:
             default:
@@ -217,7 +147,7 @@ void setup() {
 
     // Serial output and display
     Serial.begin(115200);
-    display.init();
+    app()->display()->init();  // TODO: move into app->init
 
 #ifdef ESP32
     Serial.print("Connecting to WiFi ");
@@ -229,8 +159,11 @@ void setup() {
     Serial.print("WiFi connected: ");
     Serial.println(WiFi.localIP());
 
-    server = GaggiaWebServer::getInstance();
-    server->begin(&temperature, &target_temperature, &temperature_overshoot_guard);
+    app()->udp()->begin(WiFi.localIP(), 6777);  // TODO: move into app->init
+    app()->send_udp_packet("\nSTART\n");
+
+    // TODO: move into app->init
+    app()->webserver()->begin(&temperature, &target_temperature, &temperature_overshoot_guard);
 #endif
 
     // RGB LEDs
@@ -250,17 +183,20 @@ void setup() {
     if (!thermocouple.begin() || thermocouple.readCelsius() == 0.0) {
         Serial.println("ERROR thermocouple");
     }
+
+    app()->heatercontroller()->set_target(target_temperature);
 }
 
 void set_ssr(uint8_t pwm_percent) {
 #ifdef ESP32
     // Set PWM frequency to 10 Hz so that mains voltage can swing multiple times.
     // Set duty cycle according to how much to enable heater.
-    if (pwm_percent == 0) {
+    if (pwm_percent < 10) {
         if (isr_pwm_channel > -1) {
             isr_pwm.deleteChannel(isr_pwm_channel);
             isr_pwm_channel = -1;
         }
+        digitalWrite(PIN_SSR, LOW);
     } else if (isr_pwm_channel == -1) {
         isr_pwm_channel = isr_pwm.setPWM(PIN_SSR, 5, pwm_percent);
     } else {
@@ -293,7 +229,7 @@ void get_buf_pressure(char *buf_pressure, double pressure_bar) {
  * Fill string buffer with information for warmup and brewing screens
  */
 void get_buf_timer(char *buf_timer, unsigned long m) {
-    if (display_status == DISPLAY_WARMUP_TIMER) {
+    if (app()->get_current_display_status() == DISPLAY_WARMUP_TIMER) {
         unsigned int m_min = (unsigned int)((m / 1000) / 60);
         unsigned int m_sec = (unsigned int)((m / 1000) % 60);
         sprintf(buf_timer, "%02u:%02u", m_min, m_sec);
@@ -302,18 +238,38 @@ void get_buf_timer(char *buf_timer, unsigned long m) {
     }
 }
 
+void get_buf_status(char *buf_status) {
+    sprintf(buf_status, "PWM%%: %u", (uint8_t)app()->heatercontroller()->get_output());
+}
+
+void set_fake_temperature(double temp) {
+    temperature = temp;
+}
+
+void set_target_temperature(double temp) {
+    target_temperature = temp;
+    app()->heatercontroller()->set_target(target_temperature); // TODO: store in EEPROM/SPIFFS
+}
+
+void set_pid_parameters(double p, double i, double d) {
+    app()->heatercontroller()->set_pid_parameters(p, i, d); // TODO: store in EEPROM/SPIFFS
+}
+
+bool get_log(unsigned char i, char *buf) {
+    return app()->systemlog()->get_log(i, buf);
+}
+
 /*
  * The program's main loop
  */
 void loop() {
-    static char buf_temperature[16], buf_pressure[10], buf_status[8], buf_timer[8];
+    static char buf_temperature[16], buf_pressure[10], buf_status[10], buf_timer[8];
 
     static unsigned long last_update_time = 0;
     static unsigned long last_brew_timer_update = 0;
     static unsigned long last_graph_switch_time = 0;
     const unsigned long m = millis();
 
-    temperature = thermocouple.readCelsius();
     static double last_temperature = 0;
     const unsigned int pressure_raw = analogRead(PIN_ADC_PRESSURE);
 
@@ -328,7 +284,7 @@ void loop() {
     static bool brew_switch_activated = false;
     static unsigned long brew_switch_activated_time = 0;
 
-    if (display_status == DISPLAY_ERROR) {
+    if (app()->get_current_display_status() == DISPLAY_ERROR) {
         while(1) {};
         return;
     }
@@ -338,7 +294,7 @@ void loop() {
 
 #ifdef ESP32
     // Handle HTTP clients
-    server->service();
+    app()->webserver()->service();
 #endif
 
     // Brew switch is a signal from an AC detection circuit (opto-isolated) so it
@@ -362,32 +318,40 @@ void loop() {
             brew_switch_check_counter = 0;
             brew_switch_activated = false;
 
-            if (display_status == DISPLAY_BREWING) goto_mode(DISPLAY_GRAPH_TEMPERATURE);
+            if (app()->get_current_display_status() == DISPLAY_BREWING) app()->goto_mode(DISPLAY_GRAPH_TEMPERATURE);
         }
     }
 
     // Set SSR based on HeaterController, not direct from button inputs or measured temperature
-    // TODO: Use HeaterController (PID)
-    //heater_controller.update(temperature);
-    //set_ssr(...);
+    if (temperature == 0) {
+        temperature = thermocouple.readCelsius();
+    }
+    app()->heatercontroller()->update(temperature);
 
-    if (display_status == DISPLAY_WARMUP_TIMER) {
+    if (app()->get_current_display_status() == DISPLAY_WARMUP_TIMER) {
         // Automatically move from Warmup to Live after 15 minutes
-        if (m > AUTO_ADVANCE_TIME_WARMUP_TO_LIVE) goto_mode(DISPLAY_LIVE);
+        if (m > AUTO_ADVANCE_TIME_WARMUP_TO_LIVE) app()->goto_mode(DISPLAY_LIVE);
     }
 
     // Move to Brewing mode 5 seconds after brewing switch got activated
-    if (display_status == DISPLAY_WARMUP_TIMER || display_status == DISPLAY_LIVE) {
-        if (brew_switch_activated && (m - brew_switch_activated_time) > AUTO_ADVANCE_TIME_LIVE_TO_BREWING) goto_mode(DISPLAY_BREWING);
+    if (app()->get_current_display_status() == DISPLAY_WARMUP_TIMER || app()->get_current_display_status() == DISPLAY_LIVE) {
+        if (brew_switch_activated && (m - brew_switch_activated_time) > AUTO_ADVANCE_TIME_LIVE_TO_BREWING) app()->goto_mode(DISPLAY_BREWING);
     }
 
     // Only update Serial and display every 0.5 s
     // The extra work in here takes approx. 60 ms (measured with oscilloscope)
     if ((unsigned long)(m - last_update_time) > DISPLAY_UPDATE_INTERVAL) {
         // Increment brew timer by one second if in brewing mode
-        if (display_status == DISPLAY_BREWING && ((m - last_brew_timer_update) > 1000)) {
+        if (app()->get_current_display_status() == DISPLAY_BREWING && ((m - last_brew_timer_update) > 1000)) {
             last_brew_timer_update = m;
             brew_timer++;
+        }
+
+        set_ssr((uint8_t)app()->heatercontroller()->get_output());
+        {
+        char buf_udp[64];
+        sprintf(buf_udp, "T:%d P:%u\n", (int)temperature, (uint8_t)app()->heatercontroller()->get_output());
+        app()->send_udp_packet(buf_udp);
         }
 
         // Get temperature
@@ -407,21 +371,11 @@ void loop() {
         // Log current state
         {
         char buf_serial[64], buf_temp[8];
-        sprintf(buf_serial, "[%u] T: %sC [>%uC, -%uC, ^%u]",
+        sprintf(buf_serial, "[%u] T: %sC [>%uC, -%uC, ^%u] PWM: %u",
                 (unsigned int)(m/1000),
-                convert_temperature_to_str(buf_temp), target_temperature, temperature_overshoot_guard, temp_rising ? 1 : 0);
-        systemlog.log(buf_serial);
+                convert_temperature_to_str(buf_temp), target_temperature, temperature_overshoot_guard, temp_rising ? 1 : 0, (uint8_t)app()->heatercontroller()->get_output());
+        app()->systemlog()->log(buf_serial);
         }
-
-        // PID here?
-        // Basic temperature control
-        /*if (temp_rising) {
-            if (temperature < (target_temperature - temperature_overshoot_guard)) set_ssr(100);
-            else set_ssr(0);
-        } else {
-            if (temperature > target_temperature) set_ssr(0);
-            else set_ssr(100);
-        }*/
 
         // Pressure conversion
         // Max pressure of sensor is 1.2 Mpa = 174 psi = 12 bar
@@ -439,7 +393,7 @@ void loop() {
         //   Store as uint8_t. Decode: Treal = Tlog / 2 + 70
         // Pressure: record 0.5 bar resolution with range from 0 to 14 => 28 values
         //   Store as uint8_t. Decode: Preal = Plog / 2
-        if (display_status == DISPLAY_BREWING && (update_cycle++) >= 1) {
+        if (app()->get_current_display_status() == DISPLAY_BREWING && (update_cycle++) >= 1) {
             update_cycle = 0;
 
             // Filter out values outside of 60C to 150C range
@@ -452,39 +406,41 @@ void loop() {
 
             log_index++;
             if (log_index >= RECORD_LOG_SIZE) { // 50 s
-                goto_mode(DISPLAY_GRAPH_TEMPERATURE);
+                app()->goto_mode(DISPLAY_GRAPH_TEMPERATURE);
             }
         }
 
         // Populate string buffers and sent to display for drawing
-        switch (display_status) {
+        switch (app()->get_current_display_status()) {
             case DISPLAY_WARMUP_TIMER:
                 get_buf_temperature(buf_temperature, temperature);
                 get_buf_timer(buf_timer, m);
-                display.draw_warmup_timer(buf_temperature, buf_timer, buf_status);
+                get_buf_status(buf_status);
+                app()->display()->draw_warmup_timer(buf_temperature, buf_timer, buf_status);
                 break;
             case DISPLAY_LIVE:
                 get_buf_temperature(buf_temperature, temperature);
                 get_buf_pressure(buf_pressure, pressure_bar);
-                display.draw_live_status(buf_temperature, buf_pressure, buf_status);
+                get_buf_status(buf_status);
+                app()->display()->draw_live_status(buf_temperature, buf_pressure, buf_status);
                 break;
             case DISPLAY_BREWING:
                 get_buf_temperature(buf_temperature, temperature);
                 get_buf_pressure(buf_pressure, pressure_bar);
                 get_buf_timer(buf_timer, brew_timer);
-                display.draw_brew_status(buf_temperature, buf_pressure, buf_status, buf_timer);
+                app()->display()->draw_brew_status(buf_temperature, buf_pressure, buf_status, buf_timer);
                 break;
             case DISPLAY_GRAPH_TEMPERATURE:
-                display.draw_graph("Temp", temperature_log, log_index, 70, 120);
+                app()->display()->draw_graph("Temp", temperature_log, log_index, 70, 120);
                 if ((m - last_graph_switch_time) > 3000) {
-                    goto_mode(DISPLAY_GRAPH_PRESSURE);
+                    app()->goto_mode(DISPLAY_GRAPH_PRESSURE);
                     last_graph_switch_time = m;
                 }
                 break;
             case DISPLAY_GRAPH_PRESSURE:
-                display.draw_graph("Pres", pressure_log, log_index, 0, 14);
+                app()->display()->draw_graph("Pres", pressure_log, log_index, 0, 14);
                 if ((m - last_graph_switch_time) > 3000) {
-                    goto_mode(DISPLAY_GRAPH_TEMPERATURE);
+                    app()->goto_mode(DISPLAY_GRAPH_TEMPERATURE);
                     last_graph_switch_time = m;
                 }
                 break;
